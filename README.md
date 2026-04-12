@@ -1,0 +1,103 @@
+# Frozen ViT + DETR Object Detection
+
+Fine-tunes a DETR-style detection head on top of a frozen ViT backbone (`vit_base_patch16_rope_reg1_gap_256`) pretrained on ImageNet-1k via the labelmix pipeline.
+
+**Training data:** Objects365  
+**Evaluation data:** COCO val, COCO-O
+
+## Architecture
+
+```
+Image (B, 3, 256, 256)
+  → FrozenVitBackbone  [all params frozen, eval mode]
+  → (B, H*W, 768) spatial tokens
+  → DETRHead           [trainable decoder-only]
+      input_proj (768 → 256)
+      + 2D sinusoidal position encoding
+      → TransformerDecoder (6 layers, 8 heads)
+      → class_head (256 → num_classes+1)
+      → bbox_head  (256 → 4, sigmoid → normalized cxcywh)
+  → {pred_logits, pred_boxes, aux_outputs}
+```
+
+Only the DETR head is optimized. The ViT encoder is never updated.
+
+## Checkpoint
+
+| Field | Value |
+|-------|-------|
+| Model | `vit_base_patch16_rope_reg1_gap_256` |
+| Dataset | ImageNet-1k |
+| Best epoch | 107 |
+| Top-1 | 82.05% |
+| Top-5 | 96.10% |
+| Path | `checkpoints/labelmix/model_best.pth.tar` |
+
+## Pipeline
+
+### Training (Objects365)
+
+The model trains with `num_classes=365` (auto-detected from Objects365 annotations). The full ViT backbone is frozen; only the DETR decoder head is updated.
+
+### Evaluation (COCO / COCO-O)
+
+At eval time, `build_category_mapping` matches Objects365 categories to COCO's 80 categories by name (case-insensitive, with an alias table for known mismatches like `"Stuffed Toy" → "teddy bear"`). Predictions for unmapped classes are dropped. COCO mAP is computed via `pycocotools`.
+
+COCO-O uses the same 80 COCO categories, so the same class mapping applies.
+
+## Usage
+
+```bash
+python detection_train.py \
+    --train-img-dir /data/objects365/train \
+    --train-ann     /data/objects365/annotations/train.json \
+    --val-img-dir   /data/coco/val2017 \
+    --val-ann       /data/coco/annotations/instances_val2017.json \
+    --coco-o-img-dir /data/coco-o/images \
+    --coco-o-ann     /data/coco-o/annotations/coco_o.json \
+    --checkpoint    checkpoints/labelmix/model_best.pth.tar \
+    --epochs 50 \
+    --lr 1e-4 \
+    --batch-size 4 \
+    --eval-interval 5
+```
+
+## Project Structure
+
+```
+detection/
+  __init__.py            # public API
+  backbone.py            # FrozenVitBackbone — frozen timm ViT
+  detr_head.py           # DETRHead — transformer decoder + prediction heads
+  det_model.py           # DetectionModel — backbone + head composition
+  matcher.py             # HungarianMatcher — bipartite assignment
+  losses.py              # DetectionLoss — CE + L1 + GIoU
+  position_encoding.py   # PositionEncoding2D — fixed sin/cos grid encoding
+  datasets.py            # CocoFormatDataset — works with Objects365, COCO, COCO-O
+  class_mapping.py       # build_category_mapping — Objects365 ↔ COCO by name
+  coco_eval.py           # evaluate_coco_map — pycocotools mAP evaluation
+detection_train.py       # training entry point
+checkpoints/labelmix/    # pretrained ViT backbone weights
+```
+
+## Known Issues
+
+### 1. Docstring / implementation mismatch in `detection/losses.py`
+
+The module docstring and `DetectionLoss` class docstring both reference "Focal classification loss," but `_loss_classification` actually uses `F.cross_entropy` with a weighted no-object class. The `sigmoid_focal_loss` function is defined at the top of the file but never called. The `focal_alpha` and `focal_gamma` constructor parameters are accepted but unused (dead code).
+
+**Impact:** No functional bug — original DETR uses CE, not focal loss. The docstrings are misleading and the dead code adds confusion.
+
+### 2. No data augmentation for detection
+
+`CocoFormatDataset` only applies `Resize → ToTensor → Normalize`. Detection fine-tuning typically benefits from horizontal flip, color jitter, and scale jitter. Additionally, the current resize squashes images to a fixed square without preserving aspect ratio, which distorts object shapes and can hurt bbox regression quality. Aspect-ratio-preserving resize with padding is more standard for detection pipelines.
+
+**Impact:** Likely to limit final detection accuracy, especially on objects with extreme aspect ratios.
+
+### 3. Missing `pytorch-image-models` dependency
+
+`detection_train.py` prepends `pytorch-image-models/` to `sys.path` (lines 30-32), but that directory does not exist in the repository. Training will fail unless either:
+- The `pytorch-image-models` repo is cloned into the project root, or
+- `timm` is installed via `pip install timm` and the `sys.path` hack is removed.
+
+**Impact:** Script will not run out of the box.
