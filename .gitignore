@@ -1,0 +1,5 @@
+# Training checkpoints and weights
+checkpoints/
+
+# Vendored timm / PyTorch Image Models tree (large; clone separately)
+pytorch-image-models/
