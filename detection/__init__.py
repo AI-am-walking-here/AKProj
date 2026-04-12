@@ -7,6 +7,7 @@ from .position_encoding import PositionEncoding2D
 from .datasets import CocoFormatDataset, collate_fn
 from .class_mapping import build_category_mapping, save_mapping, load_mapping
 from .coco_eval import evaluate_coco_map, run_coco_evaluation
+from .config import load_config, Config
 
 __all__ = [
     "FrozenVitBackbone",
@@ -22,4 +23,6 @@ __all__ = [
     "load_mapping",
     "evaluate_coco_map",
     "run_coco_evaluation",
+    "load_config",
+    "Config",
 ]

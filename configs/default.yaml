@@ -1,0 +1,80 @@
+# ============================================================================
+# Default detection training config
+#
+# Usage:  python detection_train.py --config configs/default.yaml
+#
+# To experiment: copy this file, change what you need, run with --config.
+# CLI args (--lr, --batch-size, etc.) override values in this file.
+# ============================================================================
+
+# ---------- backbone ----------
+backbone:
+  type: vit                                       # backbone family [vit]
+  name: vit_base_patch16_rope_reg1_gap_256        # timm registry name
+  checkpoint: checkpoints/labelmix/model_best.pth.tar
+  pretrained: false
+  img_size: 256
+
+# ---------- detection head ----------
+head:
+  type: detr                                      # head family [detr]
+  d_model: 256
+  nhead: 8
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  num_queries: 100
+  aux_loss: true
+
+# ---------- data ----------
+data:
+  train_img_dir: null       # e.g. /data/objects365/train
+  train_ann: null           # e.g. /data/objects365/annotations/train.json
+  val_img_dir: null         # e.g. /data/coco/val2017
+  val_ann: null             # e.g. /data/coco/annotations/instances_val2017.json
+  coco_o_img_dir: null      # e.g. /data/coco-o/images
+  coco_o_ann: null          # e.g. /data/coco-o/annotations/coco_o.json
+  num_classes: null          # auto-detected from training annotations if null
+
+# ---------- loss ----------
+loss:
+  cls_type: focal            # classification loss [focal, cross_entropy]
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  weight_cls: 2.0            # DINOv3: 2
+  weight_bbox: 1.0           # DINOv3: 1
+  weight_giou: 2.0           # DINOv3: 2
+  eos_coef: 0.1              # background class weight (cross_entropy only)
+
+# ---------- matcher ----------
+matcher:
+  cost_class: 2.0
+  cost_bbox: 5.0
+  cost_giou: 2.0
+
+# ---------- training ----------
+training:
+  epochs: 50
+  batch_size: 4
+  lr: 5.0e-5                 # DINOv3 stage-1: 5e-5
+  weight_decay: 0.05         # DINOv3: 0.05
+  lr_schedule: step           # [step, cosine]
+  lr_drop: 40                # epoch to drop LR (step schedule)
+  warmup_steps: 1000
+  max_grad_norm: 0.1
+  num_workers: 4
+
+# ---------- evaluation ----------
+eval:
+  interval: 1                # run COCO mAP every N epochs
+  score_threshold: 0.01
+  max_detections: 100
+
+# ---------- output ----------
+output:
+  dir: output/detection
+  log_interval: 50
+  save_interval: 5
+
+# ---------- device ----------
+device: cuda

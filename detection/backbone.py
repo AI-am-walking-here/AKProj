@@ -4,9 +4,7 @@ Loads a timm Eva model, freezes all parameters, and exposes only
 `forward_features()` with prefix tokens stripped — yielding a clean
 (B, H*W, D) spatial token tensor ready for a downstream detection head.
 
-Imports timm via the vendored pytorch-image-models tree. The caller
-must ensure `pytorch-image-models/` is on `sys.path` (see det_model.py
-or detection_train.py).
+Requires ``timm`` (pip install timm).
 """
 from typing import Optional, Tuple
 
