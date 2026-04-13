@@ -8,8 +8,15 @@
 # ============================================================================
 
 # ---------- backbone ----------
+# type: vit | cnn
+# For CNN backbones, use any timm CNN name (resnet50, convnext_base, etc.)
+# Example CNN config:
+#   type: cnn
+#   name: resnet50
+#   checkpoint: checkpoints/resnet/model_best.pth.tar
+#   pretrained: true
 backbone:
-  type: vit                                       # backbone family [vit]
+  type: vit                                       # backbone family [vit, cnn]
   name: vit_base_patch16_rope_reg1_gap_256        # timm registry name
   checkpoint: checkpoints/labelmix/model_best.pth.tar
   pretrained: false

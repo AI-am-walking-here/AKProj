@@ -49,6 +49,7 @@ def _set_nested(d: Dict, dotted_key: str, value: Any) -> None:
 # Maps flat CLI flag → dotted YAML path.
 _CLI_TO_YAML = {
     "config":           None,  # consumed before reaching YAML
+    "backbone_type":    "backbone.type",
     "train_img_dir":    "data.train_img_dir",
     "train_ann":        "data.train_ann",
     "val_img_dir":      "data.val_img_dir",
@@ -108,6 +109,9 @@ def build_cli_parser() -> argparse.ArgumentParser:
     p.add_argument("--img-size", type=int, default=None)
 
     # backbone
+    p.add_argument("--backbone-type", type=str, default=None,
+                   choices=["vit", "cnn"],
+                   help="Backbone family: vit or cnn")
     p.add_argument("--backbone", type=str, default=None)
     p.add_argument("--pretrained", action="store_true", default=None)
     p.add_argument("--checkpoint", type=str, default=None)

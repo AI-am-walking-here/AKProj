@@ -1,4 +1,4 @@
-"""Detection training: frozen ViT backbone + DETR head.
+"""Detection training: frozen backbone (ViT or CNN) + DETR head.
 
 Train on Objects365, evaluate COCO mAP on COCO and COCO-O.
 
@@ -7,6 +7,9 @@ Usage:
 
     CLI flags override YAML values:
     python detection_train.py --config configs/default.yaml --lr 1e-4 --batch-size 8
+
+    CNN backbone:
+    python detection_train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
 
 Requires: pip install timm (see requirements.txt).
 """
@@ -184,6 +187,7 @@ def main():
 
     # ---- model ----
     model = build_detection_model(
+        backbone_type=cfg.backbone.type,
         model_name=cfg.backbone.name,
         pretrained=cfg.backbone.pretrained,
         checkpoint_path=cfg.backbone.checkpoint,

@@ -1,8 +1,11 @@
-"""Frozen ViT backbone extractor.
+"""Frozen backbone feature extractors for detection.
 
-Loads a timm Eva model, freezes all parameters, and exposes only
-`forward_features()` with prefix tokens stripped — yielding a clean
-(B, H*W, D) spatial token tensor ready for a downstream detection head.
+Provides both ViT and CNN backbone wrappers that share a common output
+interface: ``(features, spatial_shape)`` where ``features`` is
+``(B, H*W, D)`` and ``spatial_shape`` is ``(H, W)``.
+
+Any detection head that consumes this contract works with either backbone,
+enabling apples-to-apples comparison of backbone transfer quality.
 
 Requires ``timm`` (pip install timm).
 """
@@ -101,6 +104,109 @@ class FrozenVitBackbone(nn.Module):
         return spatial_tokens, self.grid_size
 
     def train(self, mode: bool = True) -> "FrozenVitBackbone":
+        """Override to keep backbone permanently in eval mode."""
+        super().train(mode)
+        self.model.eval()
+        return self
+
+
+class FrozenCnnBackbone(nn.Module):
+    """Wraps a timm CNN as a frozen feature extractor for detection.
+
+    Extracts the final-stage spatial feature map via ``forward_features``,
+    flattens it to ``(B, H*W, C)``, and returns the same
+    ``(features, spatial_shape)`` tuple as ``FrozenVitBackbone`` so the
+    downstream detection head is completely backbone-agnostic.
+
+    Works with any timm CNN whose ``forward_features`` returns a 4-D
+    ``(B, C, H, W)`` tensor: ResNet, ConvNeXt, EfficientNet, etc.
+
+    Args:
+        model_name: timm model registry name (e.g. ``"resnet50"``).
+        pretrained: Load timm pretrained weights (from HF hub).
+        checkpoint_path: Path to a local ``.pth`` checkpoint file.
+        img_size: Override image size (passed to timm factory).
+    """
+
+    def __init__(
+        self,
+        model_name: str = "resnet50",
+        pretrained: bool = False,
+        checkpoint_path: Optional[str] = None,
+        img_size: Optional[int] = None,
+    ):
+        super().__init__()
+
+        factory_kwargs = {}
+        if img_size is not None:
+            factory_kwargs["img_size"] = img_size
+
+        self.model = timm.create_model(
+            model_name,
+            pretrained=pretrained,
+            num_classes=0,
+            **factory_kwargs,
+        )
+
+        if checkpoint_path is not None:
+            self._load_checkpoint(checkpoint_path)
+
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.model.eval()
+
+        self.embed_dim: int = self.model.num_features
+
+        self._img_size = img_size or 256
+        self.grid_size: Tuple[int, int] = self._infer_grid_size()
+
+    def _infer_grid_size(self) -> Tuple[int, int]:
+        """Run a dummy forward pass to determine the spatial grid size."""
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, self._img_size, self._img_size)
+            feat = self.model.forward_features(dummy)
+        if feat.dim() == 4:
+            return (feat.shape[2], feat.shape[3])
+        raise ValueError(
+            f"Expected 4-D (B,C,H,W) from CNN forward_features, "
+            f"got shape {feat.shape}. Model '{type(self.model).__name__}' "
+            f"may not be a standard CNN."
+        )
+
+    def _load_checkpoint(self, path: str) -> None:
+        """Load a classification checkpoint, dropping head-related keys."""
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        if "state_dict" in state:
+            state = state["state_dict"]
+        elif "model" in state:
+            state = state["model"]
+        if "state_dict_ema" in state:
+            state = state["state_dict_ema"]
+
+        drop_prefixes = ("head.", "fc.", "classifier.")
+        state = {
+            k: v for k, v in state.items()
+            if not any(k.startswith(p) for p in drop_prefixes)
+        }
+        self.model.load_state_dict(state, strict=False)
+
+    @torch.no_grad()
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tuple[int, int]]:
+        """Extract spatial features from the frozen CNN backbone.
+
+        Args:
+            x: Input images ``(B, C, H, W)``.
+
+        Returns:
+            features: ``(B, H_feat * W_feat, embed_dim)`` spatial features.
+            spatial_shape: ``(H_feat, W_feat)`` grid dimensions.
+        """
+        feat = self.model.forward_features(x)  # (B, C, H, W)
+        B, C, H, W = feat.shape
+        spatial_tokens = feat.flatten(2).transpose(1, 2)  # (B, H*W, C)
+        return spatial_tokens, (H, W)
+
+    def train(self, mode: bool = True) -> "FrozenCnnBackbone":
         """Override to keep backbone permanently in eval mode."""
         super().train(mode)
         self.model.eval()

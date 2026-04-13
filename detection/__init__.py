@@ -1,4 +1,4 @@
-from .backbone import FrozenVitBackbone
+from .backbone import FrozenVitBackbone, FrozenCnnBackbone
 from .detr_head import DETRHead
 from .det_model import DetectionModel
 from .matcher import HungarianMatcher
@@ -11,6 +11,7 @@ from .config import load_config, Config
 
 __all__ = [
     "FrozenVitBackbone",
+    "FrozenCnnBackbone",
     "DETRHead",
     "DetectionModel",
     "HungarianMatcher",
