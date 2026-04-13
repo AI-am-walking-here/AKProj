@@ -72,7 +72,7 @@ class FrozenVitBackbone(nn.Module):
 
     def _load_checkpoint(self, path: str) -> None:
         """Load a classification checkpoint, dropping head-related keys."""
-        state = torch.load(path, map_location="cpu", weights_only=True)
+        state = torch.load(path, map_location="cpu", weights_only=False)
         if "state_dict" in state:
             state = state["state_dict"]
         elif "model" in state:
@@ -175,7 +175,7 @@ class FrozenCnnBackbone(nn.Module):
 
     def _load_checkpoint(self, path: str) -> None:
         """Load a classification checkpoint, dropping head-related keys."""
-        state = torch.load(path, map_location="cpu", weights_only=True)
+        state = torch.load(path, map_location="cpu", weights_only=False)
         if "state_dict" in state:
             state = state["state_dict"]
         elif "model" in state:

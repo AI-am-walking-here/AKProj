@@ -1,0 +1,103 @@
+============================================================================
+AKProj — TODO
+============================================================================
+
+------------------------------------------------------------------------
+DATA AUGMENTATION
+------------------------------------------------------------------------
+Currently datasets.py only applies Resize + ImageNet Normalize.
+Detection benchmarks typically gain 3-8 mAP from proper augmentation.
+
+Suggestions (ordered by expected impact):
+
+  1. Random Horizontal Flip
+     - Cheapest win. Flip image + mirror box x-coordinates.
+     - Nearly universal in detection pipelines.
+
+  2. Random Resize + Crop (Multi-scale training)
+     - Randomly resize the short side to a range (e.g. 480-800),
+       then crop to a fixed size.
+     - Teaches the detector scale invariance.
+
+  3. Color Jitter / PhotoMetric Distortion
+     - Random brightness, contrast, saturation, hue.
+     - Improves robustness to lighting variation.
+
+  4. Mosaic / MixUp (optional, aggressive)
+     - Stitches 4 images into one tile, forces the model to
+       handle dense small-object scenes.
+     - High variance — helps large datasets, can hurt small ones.
+
+  Implementation approach:
+  - Create an AugmentationPipeline class that takes a config dict
+    and composes torchvision.transforms.v2 (or albumentations).
+  - Inject it into CocoFormatDataset via constructor arg so the
+    dataset class itself stays clean.
+  - Gate each augmentation behind a config flag so you can A/B test:
+      data:
+        augmentation:
+          horizontal_flip: true
+          multiscale: [480, 512, 544, 576, 608, 640]
+          color_jitter: true
+          mosaic: false
+
+------------------------------------------------------------------------
+MIXED PRECISION (AMP)
+------------------------------------------------------------------------
+Training the DETR decoder in float32 is ~2x slower than necessary.
+torch.amp.autocast + GradScaler gives near-identical accuracy at
+half the memory and roughly double the throughput.
+
+  Steps:
+  1. Add config flag:  training.amp: true
+  2. In detection_train.py train_one_epoch():
+       - Wrap the forward + loss in torch.amp.autocast("cuda")
+       - Use torch.amp.GradScaler for loss.backward() and
+         optimizer.step()
+  3. Keep eval in float32 (autocast off) for stable mAP numbers.
+  4. GradScaler handles inf/nan from float16 overflow automatically.
+
+  Edge case: focal loss sigmoid can underflow in fp16 on rare
+  occasions. If training becomes unstable, wrap just the focal
+  loss computation in a float32 context.
+
+------------------------------------------------------------------------
+RESUME FROM CHECKPOINT
+------------------------------------------------------------------------
+If training crashes or is preempted at epoch N, everything restarts
+from epoch 1. Saving and loading full training state fixes this.
+
+  What to save (extend the periodic checkpoint):
+    {
+      "epoch": epoch,
+      "head_state_dict": model.head.state_dict(),
+      "optimizer_state_dict": optimizer.state_dict(),
+      "scheduler_state_dict": scheduler.state_dict(),
+      "best_ap": best_ap,
+      "config": cfg.to_dict(),    # reproducibility
+    }
+
+  What to add to config / CLI:
+    training:
+      resume: null   # path to checkpoint to resume from
+
+    --resume checkpoints/checkpoint_epoch_30.pth
+
+  In detection_train.py main():
+    - If resume path is set, load the checkpoint
+    - Restore head weights, optimizer state, scheduler state, best_ap
+    - Set start_epoch = checkpoint["epoch"] + 1
+    - Continue the training loop from start_epoch
+
+------------------------------------------------------------------------
+OTHER
+------------------------------------------------------------------------
+- [ ] Plumb eval.score_threshold and eval.max_detections from config
+      into the evaluate_coco_map() calls in detection_train.py
+- [ ] Add config validation (warn if backbone.type=cnn but
+      backbone.name looks like a ViT model, or vice versa)
+- [ ] Consider replacing scipy.optimize.linear_sum_assignment with a
+      pure-PyTorch Hungarian implementation to avoid GPU→CPU sync
+      every batch (optimization, not correctness)
+- [ ] Implement warmup scheduler (training.warmup_steps is in config
+      but never used in the training loop)

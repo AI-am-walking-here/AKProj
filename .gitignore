@@ -1,5 +1,11 @@
 # Training checkpoints and weights
 checkpoints/
 
+# Datasets (download separately)
+data/
+
+# Training outputs
+output/
+
 # Vendored timm / PyTorch Image Models tree (large; clone separately)
 pytorch-image-models/
