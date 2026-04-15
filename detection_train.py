@@ -11,6 +11,9 @@ Usage:
     CNN backbone:
     python detection_train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
 
+    Resume from checkpoint:
+    python detection_train.py --config configs/default.yaml --resume output/detection/checkpoint_epoch_30.pth
+
 Requires: pip install timm (see requirements.txt).
 """
 import logging
@@ -273,10 +276,29 @@ def main():
     scaler = GradScaler("cuda") if use_amp else None
     _logger.info(f"Mixed precision (AMP): {'enabled' if use_amp else 'disabled'}")
 
-    # ---- training loop ----
+    # ---- resume from checkpoint ----
+    start_epoch = 1
     best_ap = -1.0
+    resume_path = getattr(cfg.training, "resume", None)
 
-    for epoch in range(1, cfg.training.epochs + 1):
+    if resume_path is not None:
+        _logger.info(f"Resuming from checkpoint: {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+
+        model.head.load_state_dict(ckpt["head_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+
+        if "scaler_state_dict" in ckpt and scaler is not None:
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
+
+        start_epoch = ckpt["epoch"] + 1
+        best_ap = ckpt.get("best_ap", -1.0)
+
+        _logger.info(f"  Resumed at epoch {start_epoch}, best_ap={best_ap:.4f}")
+
+    # ---- training loop ----
+    for epoch in range(start_epoch, cfg.training.epochs + 1):
         t0 = time.time()
 
         train_metrics = train_one_epoch(
@@ -320,14 +342,16 @@ def main():
 
             if coco_metrics["AP"] > best_ap:
                 best_ap = coco_metrics["AP"]
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "head_state_dict": model.head.state_dict(),
-                        "ap": best_ap,
-                    },
-                    output_dir / "best.pth",
-                )
+                best_data = {
+                    "epoch": epoch,
+                    "head_state_dict": model.head.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_ap": best_ap,
+                }
+                if scaler is not None:
+                    best_data["scaler_state_dict"] = scaler.state_dict()
+                torch.save(best_data, output_dir / "best.pth")
                 _logger.info(f"  -> New best AP={best_ap:.4f}, saved best.pth")
 
         if run_eval and coco_o_loader is not None:
@@ -346,12 +370,18 @@ def main():
                 f"AP75={coco_o_metrics['AP75']:.4f}"
             )
 
-        # ---- periodic checkpoint ----
+        # ---- periodic checkpoint (full training state for resume) ----
         if epoch % cfg.output.save_interval == 0:
-            torch.save(
-                {"epoch": epoch, "head_state_dict": model.head.state_dict()},
-                output_dir / f"checkpoint_epoch_{epoch}.pth",
-            )
+            ckpt_data = {
+                "epoch": epoch,
+                "head_state_dict": model.head.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_ap": best_ap,
+            }
+            if scaler is not None:
+                ckpt_data["scaler_state_dict"] = scaler.state_dict()
+            torch.save(ckpt_data, output_dir / f"checkpoint_epoch_{epoch}.pth")
 
     _logger.info(f"Training complete.  Best COCO AP={best_ap:.4f}")
 

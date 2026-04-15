@@ -35,32 +35,24 @@ Implemented in detection_train.py. Enabled by default (training.amp: true).
   call in a torch.float32 autocast context as a targeted fix.
 
 ------------------------------------------------------------------------
-RESUME FROM CHECKPOINT
+RESUME FROM CHECKPOINT  [DONE]
 ------------------------------------------------------------------------
-If training crashes or is preempted at epoch N, everything restarts
-from epoch 1. Saving and loading full training state fixes this.
+Implemented in detection_train.py + config.py + default.yaml.
 
-  What to save (extend the periodic checkpoint):
-    {
-      "epoch": epoch,
-      "head_state_dict": model.head.state_dict(),
-      "optimizer_state_dict": optimizer.state_dict(),
-      "scheduler_state_dict": scheduler.state_dict(),
-      "best_ap": best_ap,
-      "config": cfg.to_dict(),    # reproducibility
-    }
+  Periodic & best checkpoints now save full training state:
+    epoch, head_state_dict, optimizer_state_dict, scheduler_state_dict,
+    best_ap, scaler_state_dict (when AMP enabled).
 
-  What to add to config / CLI:
-    training:
-      resume: null   # path to checkpoint to resume from
+  Usage:
+    python detection_train.py --config configs/default.yaml \
+        --resume output/detection/checkpoint_epoch_30.pth
 
-    --resume checkpoints/checkpoint_epoch_30.pth
+    Or in YAML:
+      training:
+        resume: output/detection/checkpoint_epoch_30.pth
 
-  In detection_train.py main():
-    - If resume path is set, load the checkpoint
-    - Restore head weights, optimizer state, scheduler state, best_ap
-    - Set start_epoch = checkpoint["epoch"] + 1
-    - Continue the training loop from start_epoch
+  On resume: head weights, optimizer, scheduler, GradScaler, start_epoch,
+  and best_ap are all restored. Training continues from epoch N+1.
 
 ------------------------------------------------------------------------
 OTHER

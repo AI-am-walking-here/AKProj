@@ -85,6 +85,7 @@ _CLI_TO_YAML = {
     "num_workers":      "training.num_workers",
     "amp":              "training.amp",
     "no_amp":           "training.amp",        # inverted bool
+    "resume":           "training.resume",
     "eval_interval":    "eval.interval",
     "output_dir":       "output.dir",
     "log_interval":     "output.log_interval",
@@ -153,6 +154,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
                    help="Enable mixed precision training")
     p.add_argument("--no-amp", action="store_true", default=None,
                    help="Disable mixed precision training")
+    p.add_argument("--resume", type=str, default=None,
+                   help="Path to checkpoint to resume training from")
 
     # eval
     p.add_argument("--eval-interval", type=int, default=None)
@@ -190,7 +193,8 @@ def load_config(argv: Optional[list] = None) -> Config:
         "matcher": {"cost_class": 2.0, "cost_bbox": 5.0, "cost_giou": 2.0},
         "training": {"epochs": 50, "batch_size": 4, "lr": 5e-5, "weight_decay": 0.05,
                       "lr_schedule": "step", "lr_drop": 40, "warmup_steps": 1000,
-                      "max_grad_norm": 0.1, "num_workers": 4, "amp": True},
+                      "max_grad_norm": 0.1, "num_workers": 4, "amp": True,
+                      "resume": None},
         "eval": {"interval": 1, "score_threshold": 0.01, "max_detections": 100},
         "output": {"dir": "output/detection", "log_interval": 50, "save_interval": 5},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
