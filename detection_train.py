@@ -16,11 +16,12 @@ Requires: pip install timm (see requirements.txt).
 import logging
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 from detection import (
@@ -53,8 +54,10 @@ def train_one_epoch(
     epoch: int,
     max_grad_norm: float = 0.1,
     log_interval: int = 50,
+    scaler: Optional[GradScaler] = None,
 ) -> Dict[str, float]:
     model.train()
+    use_amp = scaler is not None
     total_loss = 0.0
     total_cls = 0.0
     total_bbox = 0.0
@@ -65,15 +68,24 @@ def train_one_epoch(
         images = images.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(images)
-        loss_dict = criterion(outputs, targets)
-        loss = loss_dict["loss"]
+        with autocast("cuda", enabled=use_amp):
+            outputs = model(images)
+            loss_dict = criterion(outputs, targets)
+            loss = loss_dict["loss"]
 
         optimizer.zero_grad()
-        loss.backward()
-        if max_grad_norm > 0:
-            nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
-        optimizer.step()
+        if use_amp:
+            scaler.scale(loss).backward()
+            if max_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm > 0:
+                nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
+            optimizer.step()
 
         total_loss += loss.item()
         total_cls += loss_dict["loss_cls"].item()
@@ -256,6 +268,11 @@ def main():
             optimizer, step_size=cfg.training.lr_drop, gamma=0.1,
         )
 
+    # ---- mixed precision ----
+    use_amp = getattr(cfg.training, "amp", False) and device.type == "cuda"
+    scaler = GradScaler("cuda") if use_amp else None
+    _logger.info(f"Mixed precision (AMP): {'enabled' if use_amp else 'disabled'}")
+
     # ---- training loop ----
     best_ap = -1.0
 
@@ -271,6 +288,7 @@ def main():
             epoch=epoch,
             max_grad_norm=cfg.training.max_grad_norm,
             log_interval=cfg.output.log_interval,
+            scaler=scaler,
         )
         scheduler.step()
         elapsed = time.time() - t0

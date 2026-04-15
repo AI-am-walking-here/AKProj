@@ -83,6 +83,8 @@ _CLI_TO_YAML = {
     "lr_drop":          "training.lr_drop",
     "max_grad_norm":    "training.max_grad_norm",
     "num_workers":      "training.num_workers",
+    "amp":              "training.amp",
+    "no_amp":           "training.amp",        # inverted bool
     "eval_interval":    "eval.interval",
     "output_dir":       "output.dir",
     "log_interval":     "output.log_interval",
@@ -147,6 +149,10 @@ def build_cli_parser() -> argparse.ArgumentParser:
     p.add_argument("--lr-drop", type=int, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
     p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--amp", action="store_true", default=None,
+                   help="Enable mixed precision training")
+    p.add_argument("--no-amp", action="store_true", default=None,
+                   help="Disable mixed precision training")
 
     # eval
     p.add_argument("--eval-interval", type=int, default=None)
@@ -184,7 +190,7 @@ def load_config(argv: Optional[list] = None) -> Config:
         "matcher": {"cost_class": 2.0, "cost_bbox": 5.0, "cost_giou": 2.0},
         "training": {"epochs": 50, "batch_size": 4, "lr": 5e-5, "weight_decay": 0.05,
                       "lr_schedule": "step", "lr_drop": 40, "warmup_steps": 1000,
-                      "max_grad_norm": 0.1, "num_workers": 4},
+                      "max_grad_norm": 0.1, "num_workers": 4, "amp": True},
         "eval": {"interval": 1, "score_threshold": 0.01, "max_detections": 100},
         "output": {"dir": "output/detection", "log_interval": 50, "save_interval": 5},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
@@ -201,7 +207,7 @@ def load_config(argv: Optional[list] = None) -> Config:
         val = cli_dict.get(cli_key)
         if val is None:
             continue
-        if cli_key == "no_aux_loss":
+        if cli_key in ("no_aux_loss", "no_amp"):
             val = not val
         _set_nested(defaults, yaml_path, val)
 

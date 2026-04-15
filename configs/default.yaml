@@ -78,6 +78,7 @@ training:
   warmup_steps: 1000
   max_grad_norm: 0.1
   num_workers: 4
+  amp: true                  # mixed precision (float16) — ~2x faster, half memory
 
 # ---------- evaluation ----------
 eval:

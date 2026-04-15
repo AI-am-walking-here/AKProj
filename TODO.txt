@@ -20,24 +20,19 @@ Training datasets get augmentation, eval datasets get plain resize+normalize.
   - Mosaic / MixUp (aggressive, needs custom collate_fn)
 
 ------------------------------------------------------------------------
-MIXED PRECISION (AMP)
+MIXED PRECISION (AMP)  [DONE]
 ------------------------------------------------------------------------
-Training the DETR decoder in float32 is ~2x slower than necessary.
-torch.amp.autocast + GradScaler gives near-identical accuracy at
-half the memory and roughly double the throughput.
+Implemented in detection_train.py. Enabled by default (training.amp: true).
 
-  Steps:
-  1. Add config flag:  training.amp: true
-  2. In detection_train.py train_one_epoch():
-       - Wrap the forward + loss in torch.amp.autocast("cuda")
-       - Use torch.amp.GradScaler for loss.backward() and
-         optimizer.step()
-  3. Keep eval in float32 (autocast off) for stable mAP numbers.
-  4. GradScaler handles inf/nan from float16 overflow automatically.
+  - Forward + loss wrapped in torch.amp.autocast("cuda")
+  - GradScaler handles backward, unscale, step, update
+  - Grad clipping calls scaler.unscale_() before clip_grad_norm_
+  - Eval stays in float32 (no autocast)
+  - Disabled automatically on CPU (device != cuda)
+  - Toggle: --amp / --no-amp CLI flags, or training.amp in YAML
 
-  Edge case: focal loss sigmoid can underflow in fp16 on rare
-  occasions. If training becomes unstable, wrap just the focal
-  loss computation in a float32 context.
+  If focal loss becomes unstable in fp16, wrap the sigmoid_focal_loss
+  call in a torch.float32 autocast context as a targeted fix.
 
 ------------------------------------------------------------------------
 RESUME FROM CHECKPOINT
