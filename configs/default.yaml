@@ -43,6 +43,14 @@ data:
   coco_o_ann: null          # e.g. data/coco-o/annotations/coco_o.json
   num_classes: null          # auto-detected from training annotations if null
 
+# ---------- augmentation (training only) ----------
+augmentation:
+  horizontal_flip: true       # random horizontal flip (p=0.5)
+  color_jitter: false         # random brightness/contrast/saturation/hue
+  multiscale: null            # e.g. [224, 240, 256, 272, 288] for multi-scale resize
+  random_crop: false          # random crop (keeps boxes whose center survives)
+  crop_min_scale: 0.5         # minimum crop area ratio (when random_crop: true)
+
 # ---------- loss ----------
 loss:
   cls_type: focal            # classification loss [focal, cross_entropy]

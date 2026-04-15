@@ -34,6 +34,7 @@ from detection import (
 )
 from detection.config import load_config
 from detection.det_model import build_detection_model
+from detection.transforms import build_transforms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
@@ -110,10 +111,15 @@ def main():
     if not cfg.data.train_img_dir or not cfg.data.train_ann:
         raise ValueError("--train-img-dir and --train-ann are required (or set in YAML)")
 
+    aug_cfg = cfg.augmentation.to_dict() if hasattr(cfg, "augmentation") else {}
+    train_transform = build_transforms(aug_cfg, img_size=cfg.backbone.img_size, training=True)
+    eval_transform = build_transforms(img_size=cfg.backbone.img_size, training=False)
+
     train_dataset = CocoFormatDataset(
         img_dir=cfg.data.train_img_dir,
         ann_file=cfg.data.train_ann,
         img_size=cfg.backbone.img_size,
+        transform=train_transform,
     )
     num_classes = cfg.data.num_classes or train_dataset.num_classes
     _logger.info(f"Training classes: {num_classes}")
@@ -149,6 +155,7 @@ def main():
             img_dir=cfg.data.val_img_dir,
             ann_file=cfg.data.val_ann,
             img_size=cfg.backbone.img_size,
+            transform=eval_transform,
         )
         coco_loader = DataLoader(
             coco_dataset,
@@ -175,6 +182,7 @@ def main():
             img_dir=cfg.data.coco_o_img_dir,
             ann_file=cfg.data.coco_o_ann,
             img_size=cfg.backbone.img_size,
+            transform=eval_transform,
         )
         coco_o_loader = DataLoader(
             coco_o_dataset,

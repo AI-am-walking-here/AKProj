@@ -1,5 +1,6 @@
 from .backbone import FrozenVitBackbone, FrozenCnnBackbone
 from .detr_head import DETRHead
+from .transforms import build_transforms
 from .det_model import DetectionModel
 from .matcher import HungarianMatcher
 from .losses import DetectionLoss
@@ -13,6 +14,7 @@ __all__ = [
     "FrozenVitBackbone",
     "FrozenCnnBackbone",
     "DETRHead",
+    "build_transforms",
     "DetectionModel",
     "HungarianMatcher",
     "DetectionLoss",

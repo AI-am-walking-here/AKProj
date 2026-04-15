@@ -3,43 +3,21 @@ AKProj — TODO
 ============================================================================
 
 ------------------------------------------------------------------------
-DATA AUGMENTATION
+DATA AUGMENTATION  [DONE]
 ------------------------------------------------------------------------
-Currently datasets.py only applies Resize + ImageNet Normalize.
-Detection benchmarks typically gain 3-8 mAP from proper augmentation.
+Implemented in detection/transforms.py.
+Config-driven via augmentation section in default.yaml.
+Training datasets get augmentation, eval datasets get plain resize+normalize.
 
-Suggestions (ordered by expected impact):
+  Available transforms (toggle in YAML):
+  - horizontal_flip: true/false   (default: true)
+  - color_jitter: true/false      (default: false)
+  - multiscale: [list of sizes]   (default: null = disabled)
+  - random_crop: true/false       (default: false)
+  - crop_min_scale: float         (default: 0.5)
 
-  1. Random Horizontal Flip
-     - Cheapest win. Flip image + mirror box x-coordinates.
-     - Nearly universal in detection pipelines.
-
-  2. Random Resize + Crop (Multi-scale training)
-     - Randomly resize the short side to a range (e.g. 480-800),
-       then crop to a fixed size.
-     - Teaches the detector scale invariance.
-
-  3. Color Jitter / PhotoMetric Distortion
-     - Random brightness, contrast, saturation, hue.
-     - Improves robustness to lighting variation.
-
-  4. Mosaic / MixUp (optional, aggressive)
-     - Stitches 4 images into one tile, forces the model to
-       handle dense small-object scenes.
-     - High variance — helps large datasets, can hurt small ones.
-
-  Implementation approach:
-  - Create an AugmentationPipeline class that takes a config dict
-    and composes torchvision.transforms.v2 (or albumentations).
-  - Inject it into CocoFormatDataset via constructor arg so the
-    dataset class itself stays clean.
-  - Gate each augmentation behind a config flag so you can A/B test:
-      data:
-        augmentation:
-          horizontal_flip: true
-          multiscale: [480, 512, 544, 576, 608, 640]
-          color_jitter: true
-          mosaic: false
+  Still possible to add later:
+  - Mosaic / MixUp (aggressive, needs custom collate_fn)
 
 ------------------------------------------------------------------------
 MIXED PRECISION (AMP)

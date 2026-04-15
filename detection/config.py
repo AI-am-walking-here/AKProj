@@ -177,6 +177,8 @@ def load_config(argv: Optional[list] = None) -> Config:
                  "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100, "aux_loss": True},
         "data": {"train_img_dir": None, "train_ann": None, "val_img_dir": None,
                  "val_ann": None, "coco_o_img_dir": None, "coco_o_ann": None, "num_classes": None},
+        "augmentation": {"horizontal_flip": True, "color_jitter": False,
+                         "multiscale": None, "random_crop": False, "crop_min_scale": 0.5},
         "loss": {"cls_type": "focal", "focal_alpha": 0.25, "focal_gamma": 2.0,
                  "weight_cls": 2.0, "weight_bbox": 1.0, "weight_giou": 2.0, "eos_coef": 0.1},
         "matcher": {"cost_class": 2.0, "cost_bbox": 5.0, "cost_giou": 2.0},

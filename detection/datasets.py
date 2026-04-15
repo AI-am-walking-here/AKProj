@@ -6,9 +6,10 @@ Objects365, COCO, COCO-O, LVIS, etc.
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset
 
 _logger = logging.getLogger(__name__)
@@ -28,6 +29,9 @@ class CocoFormatDataset(Dataset):
         category_mapping: Optional dict {original_cat_id: label_index}.
             If ``None``, categories are mapped to 0 .. K-1
             in the order they appear in the annotation file.
+        transform: Optional ``(PIL.Image, target) -> (Tensor, target)``
+            pipeline. If ``None``, a default resize + normalize is used.
+            Use ``detection.transforms.build_transforms`` to construct one.
     """
 
     def __init__(
@@ -37,6 +41,7 @@ class CocoFormatDataset(Dataset):
         img_size: int = 256,
         max_detections: int = 100,
         category_mapping: Optional[Dict[int, int]] = None,
+        transform: Optional[Callable] = None,
     ):
         super().__init__()
         self.img_dir = Path(img_dir)
@@ -76,23 +81,16 @@ class CocoFormatDataset(Dataset):
             f"{self.num_classes} classes from {ann_file}"
         )
 
-        try:
-            from torchvision import transforms
-            self.transform = transforms.Compose([
-                transforms.Resize((img_size, img_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225],
-                ),
-            ])
-        except ImportError:
-            raise ImportError("torchvision is required for image transforms")
+        if transform is not None:
+            self.transform = transform
+        else:
+            from .transforms import build_transforms
+            self.transform = build_transforms(img_size=img_size, training=False)
 
     def __len__(self) -> int:
         return len(self.img_ids)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def __getitem__(self, idx: int) -> Tuple[Tensor, Dict[str, Tensor]]:
         from PIL import Image
 
         img_id = self.img_ids[idx]
@@ -101,7 +99,6 @@ class CocoFormatDataset(Dataset):
 
         img = Image.open(img_path).convert("RGB")
         orig_w, orig_h = img.size
-        img_tensor = self.transform(img)
 
         anns = self.img_anns[img_id][: self.max_detections]
 
@@ -114,13 +111,14 @@ class CocoFormatDataset(Dataset):
             boxes.append([(x + w / 2) / orig_w, (y + h / 2) / orig_h, w / orig_w, h / orig_h])
             labels.append(self.cat_to_label[ann["category_id"]])
 
-        target = {
+        target: Dict[str, Tensor] = {
             "boxes": torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros(0, 4),
             "labels": torch.tensor(labels, dtype=torch.long) if labels else torch.zeros(0, dtype=torch.long),
             "image_id": torch.tensor([img_id]),
             "orig_size": torch.tensor([orig_w, orig_h]),
         }
 
+        img_tensor, target = self.transform(img, target)
         return img_tensor, target
 
 
