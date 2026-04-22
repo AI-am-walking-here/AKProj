@@ -95,3 +95,16 @@ output:
 
 # ---------- device ----------
 device: cuda
+
+# ---------- telemetry (optional) ----------
+# Enable W&B with:
+#   python train.py --config configs/default.yaml --wandb --wandb-project my_project
+wandb:
+  enabled: false
+  project: null
+  entity: null
+  run_name: null
+  tags: []
+  mode: null           # online | offline | disabled (null = wandb default)
+  log_tables: true
+  log_files: true

@@ -38,6 +38,7 @@ from core import (
 )
 from core.config import load_config
 from core.det_model import build_detection_model
+from core.telemetry import build_sink
 from core.transforms import build_transforms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -121,6 +122,8 @@ def main():
     device = torch.device(cfg.device)
     output_dir = Path(cfg.output.dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    sink = build_sink(cfg)
 
     # ---- training dataset (Objects365) ----
     if not cfg.data.train_img_dir or not cfg.data.train_ann:
@@ -322,6 +325,8 @@ def main():
             f"train_loss={train_metrics['train_loss']:.4f}  "
             f"lr={scheduler.get_last_lr()[0]:.2e}"
         )
+        sink.log_metrics(train_metrics, step=epoch, namespace="train")
+        sink.log_metrics({"lr": float(scheduler.get_last_lr()[0])}, step=epoch, namespace="opt")
 
         # ---- COCO mAP evaluation ----
         run_eval = (epoch % cfg.eval.interval == 0) or (epoch == cfg.training.epochs)
@@ -344,6 +349,7 @@ def main():
                 f"AP50={coco_metrics['AP50']:.4f}  "
                 f"AP75={coco_metrics['AP75']:.4f}"
             )
+            sink.log_metrics(coco_metrics, step=epoch, namespace="coco")
 
             if coco_metrics["AP"] > best_ap:
                 best_ap = coco_metrics["AP"]
@@ -377,6 +383,7 @@ def main():
                 f"AP50={coco_o_metrics['AP50']:.4f}  "
                 f"AP75={coco_o_metrics['AP75']:.4f}"
             )
+            sink.log_metrics(coco_o_metrics, step=epoch, namespace="coco_o")
 
         # ---- periodic checkpoint (full training state for resume) ----
         if epoch % cfg.output.save_interval == 0:
@@ -392,6 +399,7 @@ def main():
             torch.save(ckpt_data, output_dir / f"checkpoint_epoch_{epoch}.pth")
 
     _logger.info(f"Training complete.  Best COCO AP={best_ap:.4f}")
+    sink.finish()
 
 
 if __name__ == "__main__":

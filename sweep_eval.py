@@ -25,6 +25,8 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from core.telemetry import MetricStore, build_sink
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
 
@@ -116,6 +118,7 @@ def run_sweep(
     device_override: Optional[str] = None,
     batch_size_override: Optional[int] = None,
     per_class_override: Optional[bool] = None,
+    sink=None,
 ) -> List[Dict]:
     """Evaluate each model in *entries* and return list of result dicts.
 
@@ -143,6 +146,7 @@ def run_sweep(
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     all_results: List[Dict] = []
+    store = MetricStore()
 
     for idx, entry in enumerate(entries):
         _logger.info(f"\n{'='*60}")
@@ -171,6 +175,8 @@ def run_sweep(
 
             cfg = Config(defaults)
             device = torch.device(cfg.device)
+
+            run_sink = sink or build_sink(cfg)
 
             # Class mapping
             source_to_target, target_label_to_cat_id, num_classes = build_eval_mapping(
@@ -229,6 +235,10 @@ def run_sweep(
             }
             row.update({k: v for k, v in metrics.items() if k != "per_class_ap"})
             all_results.append(row)
+            store.add_row(row)
+
+            # Per-model scalars
+            run_sink.log_metrics({k: float(v) for k, v in row.items() if isinstance(v, (int, float))}, namespace=entry.name)
 
         except Exception as exc:
             _logger.error(f"FAILED: {entry.name} — {exc}", exc_info=True)
@@ -278,12 +288,28 @@ def main(argv=None) -> None:
     # Place the combined table in the output directory if table_output is relative
     table_output_path = Path(args.output) / Path(table_output).name
 
+    # Build one sink for the sweep run (uses YAML wandb: if present).
+    # Reuses it for all entries to keep runs consolidated.
+    cfg_for_sink = None
+    try:
+        with open(entries[0].config) as f:
+            cfg_for_sink = yaml.safe_load(f) or {}
+    except Exception:
+        cfg_for_sink = {}
+    # Minimal config object for sink: merge default wandb keys if missing.
+    defaults = {"wandb": {"enabled": False}}
+    if isinstance(cfg_for_sink, dict):
+        defaults.update(cfg_for_sink)
+    from core.config import Config as _Cfg
+    sweep_sink = build_sink(_Cfg(defaults))
+
     rows = run_sweep(
         entries=entries,
         output_dir=args.output,
         device_override=args.device,
         batch_size_override=args.batch_size,
         per_class_override=args.per_class,
+        sink=sweep_sink,
     )
 
     if not rows:
@@ -296,6 +322,10 @@ def main(argv=None) -> None:
         output_path=str(table_output_path),
         formats=formats,
     )
+
+    sweep_sink.log_table("comparison_table", rows)
+    sweep_sink.log_files("table_files", written.values())
+    sweep_sink.finish()
 
     _logger.info("\nCombined table files:")
     for fmt, path in written.items():

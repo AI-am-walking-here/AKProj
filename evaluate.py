@@ -39,6 +39,8 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
+from core.telemetry import build_sink
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
 
@@ -399,6 +401,8 @@ def main(argv=None) -> None:
     device = torch.device(cfg.device)
     _logger.info(f"Device: {device}")
 
+    sink = build_sink(cfg)
+
     # Class mapping + num_classes
     source_to_target, target_label_to_cat_id, num_classes = build_eval_mapping(
         train_ann=args.train_ann,
@@ -435,6 +439,11 @@ def main(argv=None) -> None:
         per_class=args.per_class,
         device=device,
     )
+    sink.log_metrics({k: float(v) for k, v in metrics.items() if k != "per_class_ap"}, namespace="eval")
+    if args.per_class and "per_class_ap" in metrics:
+        # Log per-class AP as a table (category, AP)
+        per_class_rows = [{"category": k, "AP": float(v)} for k, v in metrics["per_class_ap"].items()]
+        sink.log_table("per_class_ap", per_class_rows)
 
     # Save
     save_results(
@@ -448,6 +457,7 @@ def main(argv=None) -> None:
     )
 
     print_summary(metrics, args.model_name)
+    sink.finish()
 
 
 if __name__ == "__main__":

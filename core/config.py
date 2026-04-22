@@ -91,6 +91,14 @@ _CLI_TO_YAML = {
     "log_interval":     "output.log_interval",
     "save_interval":    "output.save_interval",
     "device":           "device",
+    # wandb
+    "wandb":            "wandb.enabled",
+    "wandb_project":    "wandb.project",
+    "wandb_entity":     "wandb.entity",
+    "wandb_run_name":   "wandb.run_name",
+    "wandb_mode":       "wandb.mode",
+    "wandb_no_tables":  "wandb.log_tables",  # inverted bool
+    "wandb_no_files":   "wandb.log_files",   # inverted bool
 }
 
 
@@ -168,6 +176,19 @@ def build_cli_parser() -> argparse.ArgumentParser:
     # device
     p.add_argument("--device", type=str, default=None)
 
+    # wandb (optional)
+    p.add_argument("--wandb", action="store_true", default=None,
+                   help="Enable Weights & Biases logging (requires `pip install wandb`)")
+    p.add_argument("--wandb-project", type=str, default=None)
+    p.add_argument("--wandb-entity", type=str, default=None)
+    p.add_argument("--wandb-run-name", type=str, default=None)
+    p.add_argument("--wandb-mode", type=str, default=None,
+                   choices=["online", "offline", "disabled"])
+    p.add_argument("--wandb-no-tables", action="store_true", default=None,
+                   help="Disable W&B table logging")
+    p.add_argument("--wandb-no-files", action="store_true", default=None,
+                   help="Disable W&B file logging (csv/md/tex artifacts)")
+
     return p
 
 
@@ -198,6 +219,16 @@ def load_config(argv: Optional[list] = None) -> Config:
         "eval": {"interval": 1, "score_threshold": 0.01, "max_detections": 100},
         "output": {"dir": "output/detection", "log_interval": 50, "save_interval": 5},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "wandb": {
+            "enabled": False,
+            "project": None,
+            "entity": None,
+            "run_name": None,
+            "tags": [],
+            "mode": None,
+            "log_tables": True,
+            "log_files": True,
+        },
     }
 
     if args.config is not None:
@@ -211,7 +242,7 @@ def load_config(argv: Optional[list] = None) -> Config:
         val = cli_dict.get(cli_key)
         if val is None:
             continue
-        if cli_key in ("no_aux_loss", "no_amp"):
+        if cli_key in ("no_aux_loss", "no_amp", "wandb_no_tables", "wandb_no_files"):
             val = not val
         _set_nested(defaults, yaml_path, val)
 
