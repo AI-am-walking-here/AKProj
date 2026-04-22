@@ -12,7 +12,7 @@ Usage:
     python train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
 
     Resume from checkpoint:
-    python train.py --config configs/default.yaml --resume checkpoints_trained/vit/checkpoint_epoch_30.pth
+    python train.py --config configs/default.yaml --resume checkpoints/trained/vit/checkpoint_epoch_30.pth
 
 Requires: pip install timm (see requirements.txt).
 """

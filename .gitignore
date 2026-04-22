@@ -1,7 +1,5 @@
 # Training checkpoints and weights
 checkpoints/
-checkpoints_base/
-checkpoints_trained/
 *.pth
 *.pth.tar
 *.pt
@@ -14,7 +12,14 @@ __pycache__/
 *.py[cod]
 
 # Datasets (download separately)
-data/
+# Keep `data/download_data.py` tracked; ignore only the large dataset payloads.
+data/coco/**
+data/coco-o/**
+data/objects365/**
+!data/.gitkeep
+!data/coco/.gitkeep
+!data/coco-o/.gitkeep
+!data/objects365/.gitkeep
 
 # Training outputs
 output/

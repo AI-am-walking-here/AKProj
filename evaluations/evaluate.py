@@ -10,7 +10,7 @@ handed to any AI or team member without needing to understand the training loop.
 Usage
 -----
 # Evaluate ViT backbone on COCO val2017:
-python evaluate.py \\
+python evaluations/evaluate.py \\
     --config configs/default.yaml \\
     --checkpoint output/detection/best.pth \\
     --train-ann data/objects365/annotations/train.json \\
@@ -21,7 +21,7 @@ python evaluate.py \\
     --per-class
 
 # Evaluate without cross-dataset remapping (eval on same domain as training):
-python evaluate.py \\
+python evaluations/evaluate.py \\
     --config configs/default.yaml \\
     --checkpoint output/detection/best.pth \\
     --ann-file data/objects365/annotations/val.json \\
@@ -115,18 +115,7 @@ def build_eval_dataloader(
     batch_size: int = 8,
     num_workers: int = 4,
 ) -> DataLoader:
-    """Build a shuffle=False dataloader over an eval dataset.
-
-    Args:
-        img_dir: Directory containing images.
-        ann_file: COCO-format annotation JSON for the eval split.
-        cfg: Config object used to read ``img_size``.
-        batch_size: Batch size for inference (can be larger than training).
-        num_workers: DataLoader worker count.
-
-    Returns:
-        DataLoader over the eval set, no augmentation.
-    """
+    """Build a shuffle=False dataloader over an eval dataset."""
     from core.datasets import CocoFormatDataset, collate_fn
     from core.transforms import build_transforms
 
@@ -157,33 +146,21 @@ def build_eval_mapping(
     train_ann: Optional[str],
     eval_ann: str,
 ) -> Tuple[Optional[Dict[int, int]], Dict[int, int], int]:
-    """Build source→target label mapping for cross-dataset evaluation.
-
-    Args:
-        train_ann: Source (training) annotation file. If ``None``, the eval
-            dataset's own category ordering is used directly (no remapping).
-        eval_ann: Target (evaluation) annotation file.
-
-    Returns:
-        source_to_target: ``{src_label_idx: tgt_label_idx}`` or ``None``.
-        target_label_to_cat_id: ``{tgt_label_idx: coco_cat_id}``.
-        num_classes: Number of source classes (for building the model head).
-    """
-    import json
+    """Build source→target label mapping for cross-dataset evaluation."""
+    import json as _json
 
     if train_ann is None:
         _logger.info("No --train-ann provided — evaluating without cross-dataset remapping")
         with open(eval_ann) as f:
-            cats = json.load(f)["categories"]
+            cats = _json.load(f)["categories"]
         target_label_to_cat_id = {i: cat["id"] for i, cat in enumerate(cats)}
         num_classes = len(cats)
         return None, target_label_to_cat_id, num_classes
 
     from core.class_mapping import build_category_mapping
-    import json
 
     with open(train_ann) as f:
-        src_cats = json.load(f)["categories"]
+        src_cats = _json.load(f)["categories"]
     num_classes = len(src_cats)
 
     source_to_target, target_label_to_cat_id, unmatched = build_category_mapping(
@@ -211,22 +188,7 @@ def run_full_evaluation(
     per_class: bool = False,
     device: torch.device = torch.device("cpu"),
 ) -> Dict:
-    """Run the model over *loader* and compute all metrics.
-
-    Args:
-        model: DetectionModel in eval mode.
-        loader: Eval DataLoader (no augmentation).
-        ann_file: Ground-truth annotation JSON for pycocotools.
-        cfg: Config object (reads ``loss.cls_type``, ``eval.*``).
-        source_to_target: Optional cross-dataset label remap.
-        target_label_to_cat_id: Target label → COCO category ID.
-        per_class: If ``True``, also compute per-category AP.
-        device: Torch device for inference.
-
-    Returns:
-        Dict with standard 12 COCO metrics, and optionally
-        ``"per_class_ap"`` sub-dict.
-    """
+    """Run the model over *loader* and compute all metrics."""
     from core.coco_eval import predictions_to_coco_results
     from core.metrics import run_coco_evaluation, compute_per_class_ap
 
@@ -283,17 +245,7 @@ def save_results(
     ann_file: str,
     output_path: str,
 ) -> None:
-    """Persist metrics + metadata to a JSON file.
-
-    Args:
-        metrics: Dict from ``run_full_evaluation``.
-        model_name: Human-readable model label (used in the paper table).
-        backbone_type: ``"vit"`` or ``"cnn"``.
-        checkpoint_path: Path to the checkpoint that was evaluated.
-        dataset: Short dataset name (e.g. ``"coco"``, ``"coco-o"``).
-        ann_file: Annotation file path (for reproducibility).
-        output_path: Destination ``.json`` file path.
-    """
+    """Persist metrics + metadata to a JSON file."""
     record = {
         "metadata": {
             "model_name": model_name,
@@ -331,7 +283,7 @@ def print_summary(metrics: Dict, model_name: str) -> None:
     if "per_class_ap" in metrics:
         pc = metrics["per_class_ap"]
         top5 = sorted(pc.items(), key=lambda x: x[1], reverse=True)[:5]
-        print(f"  Top-5 classes: " + ", ".join(f"{n}={v*100:.1f}" for n, v in top5))
+        print("  Top-5 classes: " + ", ".join(f"{n}={v*100:.1f}" for n, v in top5))
     print("=" * 60 + "\n")
 
 
@@ -376,7 +328,7 @@ def main(argv=None) -> None:
     args = _parse_args(argv)
 
     # Load config (no training-specific CLI flags needed here)
-    from core.config import load_yaml, Config, _deep_merge
+    from core.config import Config, _deep_merge
     import yaml
 
     defaults = {
@@ -441,7 +393,6 @@ def main(argv=None) -> None:
     )
     sink.log_metrics({k: float(v) for k, v in metrics.items() if k != "per_class_ap"}, namespace="eval")
     if args.per_class and "per_class_ap" in metrics:
-        # Log per-class AP as a table (category, AP)
         per_class_rows = [{"category": k, "AP": float(v)} for k, v in metrics["per_class_ap"].items()]
         sink.log_table("per_class_ap", per_class_rows)
 
@@ -462,3 +413,4 @@ def main(argv=None) -> None:
 
 if __name__ == "__main__":
     main()
+

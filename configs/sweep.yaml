@@ -2,7 +2,7 @@
 # Multi-model evaluation sweep configuration
 #
 # Usage:
-#   python sweep_eval.py --sweep configs/sweep.yaml --output results/
+#   python evaluations/sweep_eval.py --sweep configs/sweep.yaml --output results/
 #
 # Each entry under `models` defines one model to evaluate. The sweep script
 # runs them sequentially and writes a combined comparison table in
@@ -21,7 +21,7 @@ models:
   # ---- ViT backbone (from lab mate) ----
   - name: "ViT-B DETR"
     config: configs/default.yaml
-    checkpoint: checkpoints_trained/vit/best.pth
+    checkpoint: checkpoints/trained/vit/best.pth
     backbone_type: vit
 
     # Dataset to evaluate on
@@ -36,7 +36,7 @@ models:
   # ---- CNN backbone (from lab mate) ----
   - name: "CNN DETR"
     config: configs/cnn.yaml                            # copy default.yaml and set backbone.type: cnn
-    checkpoint: checkpoints_trained/cnn/best.pth
+    checkpoint: checkpoints/trained/cnn/best.pth
     backbone_type: cnn
 
     dataset: coco
@@ -47,10 +47,10 @@ models:
     output: results/cnn_coco.json
 
   # ---- Optional: COCO-O robustness evaluation (ViT) ----
-  # Uncomment once data/coco-o/ is populated (run download_data.py with coco-o flag).
+  # Uncomment once data/coco-o/ is populated (run data/download_data.py with coco-o flag).
   # - name: "ViT-B DETR (COCO-O)"
   #   config: configs/default.yaml
-  #   checkpoint: checkpoints_trained/vit/best.pth
+  #   checkpoint: checkpoints/trained/vit/best.pth
   #   backbone_type: vit
   #   dataset: coco-o
   #   train_ann: data/objects365/annotations/train.json

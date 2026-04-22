@@ -6,10 +6,10 @@ The LaTeX output is ready to paste into your paper (booktabs, best values bold).
 
 Usage
 -----
-python sweep_eval.py --sweep configs/sweep.yaml --output results/
+python evaluations/sweep_eval.py --sweep configs/sweep.yaml --output results/
 
 Optional overrides:
-python sweep_eval.py --sweep configs/sweep.yaml --output results/ \\
+python evaluations/sweep_eval.py --sweep configs/sweep.yaml --output results/ \\
     --per-class \\
     --formats csv markdown latex \\
     --batch-size 16 \\
@@ -19,7 +19,7 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -38,6 +38,7 @@ _logger = logging.getLogger(__name__)
 @dataclass
 class ModelSweepEntry:
     """One model's evaluation specification."""
+
     name: str
     config: str
     checkpoint: str
@@ -56,21 +57,7 @@ _REQUIRED_FIELDS = {"name", "config", "checkpoint", "ann_file", "img_dir", "outp
 
 
 def load_sweep_config(path: str) -> tuple:
-    """Parse a sweep YAML into a list of ModelSweepEntry objects.
-
-    Args:
-        path: Path to the sweep YAML file.
-
-    Returns:
-        ``(entries, defaults, table_output, formats)`` where:
-        - entries: List of ModelSweepEntry
-        - defaults: Shared defaults dict
-        - table_output: Base path for the combined table file
-        - formats: List of output formats ("csv", "markdown", "latex")
-
-    Raises:
-        ValueError: If a required field is missing from a model entry.
-    """
+    """Parse a sweep YAML into a list of ModelSweepEntry objects."""
     with open(path) as f:
         raw = yaml.safe_load(f)
 
@@ -89,20 +76,22 @@ def load_sweep_config(path: str) -> tuple:
                 f"Sweep entry {i} (name={model_raw.get('name', '?')!r}) "
                 f"is missing required fields: {missing}"
             )
-        entries.append(ModelSweepEntry(
-            name=model_raw["name"],
-            config=model_raw["config"],
-            checkpoint=model_raw["checkpoint"],
-            ann_file=model_raw["ann_file"],
-            img_dir=model_raw["img_dir"],
-            output=model_raw["output"],
-            backbone_type=model_raw.get("backbone_type", "vit"),
-            dataset=model_raw.get("dataset", "coco"),
-            train_ann=model_raw.get("train_ann", None),
-            batch_size=model_raw.get("batch_size", default_batch),
-            num_workers=model_raw.get("num_workers", default_workers),
-            per_class=model_raw.get("per_class", default_per_class),
-        ))
+        entries.append(
+            ModelSweepEntry(
+                name=model_raw["name"],
+                config=model_raw["config"],
+                checkpoint=model_raw["checkpoint"],
+                ann_file=model_raw["ann_file"],
+                img_dir=model_raw["img_dir"],
+                output=model_raw["output"],
+                backbone_type=model_raw.get("backbone_type", "vit"),
+                dataset=model_raw.get("dataset", "coco"),
+                train_ann=model_raw.get("train_ann", None),
+                batch_size=model_raw.get("batch_size", default_batch),
+                num_workers=model_raw.get("num_workers", default_workers),
+                per_class=model_raw.get("per_class", default_per_class),
+            )
+        )
 
     _logger.info(f"Loaded {len(entries)} model(s) from sweep config {path}")
     return entries, sweep_defaults, table_output, formats
@@ -120,21 +109,10 @@ def run_sweep(
     per_class_override: Optional[bool] = None,
     sink=None,
 ) -> List[Dict]:
-    """Evaluate each model in *entries* and return list of result dicts.
-
-    Args:
-        entries: Models to evaluate (from ``load_sweep_config``).
-        output_dir: Directory for individual JSON result files.
-        device_override: If set, overrides device for all models.
-        batch_size_override: If set, overrides batch size for all models.
-        per_class_override: If set, overrides per_class flag for all models.
-
-    Returns:
-        List of result dicts, each containing model metadata + all metrics.
-        Failed models are skipped with a warning (no exception raised).
-    """
+    """Evaluate each model in *entries* and return list of result dicts."""
     import torch
-    from evaluate import (
+
+    from evaluations.evaluate import (
         load_model_from_checkpoint,
         build_eval_dataloader,
         build_eval_mapping,
@@ -142,7 +120,7 @@ def run_sweep(
         save_results,
         print_summary,
     )
-    from core.config import load_yaml, Config, _deep_merge
+    from core.config import Config, _deep_merge
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     all_results: List[Dict] = []
@@ -156,11 +134,23 @@ def run_sweep(
         try:
             # Build config
             defaults = {
-                "backbone": {"type": "vit", "name": "vit_base_patch16_rope_reg1_gap_256",
-                             "checkpoint": None, "pretrained": False, "img_size": 256},
-                "head": {"type": "detr", "d_model": 256, "nhead": 8, "num_decoder_layers": 6,
-                         "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100,
-                         "aux_loss": True},
+                "backbone": {
+                    "type": "vit",
+                    "name": "vit_base_patch16_rope_reg1_gap_256",
+                    "checkpoint": None,
+                    "pretrained": False,
+                    "img_size": 256,
+                },
+                "head": {
+                    "type": "detr",
+                    "d_model": 256,
+                    "nhead": 8,
+                    "num_decoder_layers": 6,
+                    "dim_feedforward": 2048,
+                    "dropout": 0.1,
+                    "num_queries": 100,
+                    "aux_loss": True,
+                },
                 "loss": {"cls_type": "focal"},
                 "eval": {"score_threshold": 0.01, "max_detections": 100},
                 "device": "cuda" if torch.cuda.is_available() else "cpu",
@@ -238,7 +228,10 @@ def run_sweep(
             store.add_row(row)
 
             # Per-model scalars
-            run_sink.log_metrics({k: float(v) for k, v in row.items() if isinstance(v, (int, float))}, namespace=entry.name)
+            run_sink.log_metrics(
+                {k: float(v) for k, v in row.items() if isinstance(v, (int, float))},
+                namespace=entry.name,
+            )
 
         except Exception as exc:
             _logger.error(f"FAILED: {entry.name} — {exc}", exc_info=True)
@@ -296,7 +289,7 @@ def main(argv=None) -> None:
             cfg_for_sink = yaml.safe_load(f) or {}
     except Exception:
         cfg_for_sink = {}
-    # Minimal config object for sink: merge default wandb keys if missing.
+
     defaults = {"wandb": {"enabled": False}}
     if isinstance(cfg_for_sink, dict):
         defaults.update(cfg_for_sink)
@@ -317,6 +310,7 @@ def main(argv=None) -> None:
         sys.exit(1)
 
     from core.metrics import build_results_table
+
     written = build_results_table(
         rows=rows,
         output_path=str(table_output_path),
@@ -334,3 +328,4 @@ def main(argv=None) -> None:
 
 if __name__ == "__main__":
     main()
+

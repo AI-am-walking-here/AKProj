@@ -5,6 +5,55 @@ Fine-tunes a DETR-style detection head on top of a frozen ViT backbone (`vit_bas
 **Training data:** Objects365  
 **Evaluation data:** COCO val, COCO-O
 
+## Repo Structure (start here)
+
+```
+AKProj/
+├─ __pycache__/
+├─ checkpoints/
+│  ├─ base/                      # backbone weights (ignored by git)
+│  │  ├─ vit/
+│  │  └─ cnn/
+│  └─ trained/                   # trained head checkpoints + resume states (ignored by git)
+│     ├─ vit/
+│     └─ cnn/
+│
+├─ configs/
+│  ├─ default.yaml               # main training config (paths, backbone, output, wandb)
+│  └─ sweep.yaml                 # sweep config (which checkpoints/configs to evaluate)
+│
+├─ core/                         # reusable library code (many scripts live here)
+│  ├─ __pycache__/
+│  ├─ metrics/                   # COCO mAP computation + per-class AP + paper-ready table generation
+│  ├─ telemetry/                 # optional logging adapters (W&B) + NullSink, used by train/eval to record metrics
+│  ├─ backbone.py
+│  ├─ det_model.py
+│  ├─ detr_head.py
+│  ├─ datasets.py
+│  ├─ losses.py
+│  └─ transforms.py
+│
+├─ data/
+│  ├─ coco/                      # COCO goes here (images + annotations) (ignored by git)
+│  ├─ coco-o/                    # COCO-O goes here (ignored by git)
+│  ├─ objects365/                # Objects365 goes here (ignored by git)
+│  └─ download_data.py           # downloads COCO val2017 (and Objects365 ann-only)
+│
+├─ evaluations/
+│  ├─ __pycache__/
+│  ├─ __init__.py
+│  ├─ evaluate.py                # single-model evaluation runner
+│  └─ sweep_eval.py              # multi-model sweep + combined paper table
+│
+├─ pytorch-image-models/         # optional vendored timm tree (ignored by git)
+│
+├─ .gitattributes
+├─ .gitignore
+├─ README.md
+├─ requirements.txt
+└─ train.py                      # training entrypoint (frozen backbone + DETR head)
+```
+
 ## Architecture
 
 ```
@@ -31,7 +80,7 @@ Only the DETR head is optimized. The ViT encoder is never updated.
 | Best epoch | 107 |
 | Top-1 | 82.05% |
 | Top-5 | 96.10% |
-| Path | `checkpoints/labelmix/model_best.pth.tar` |
+| Path | `checkpoints/base/vit/model_best.pth.tar` |
 
 ## Pipeline
 
@@ -48,14 +97,14 @@ COCO-O uses the same 80 COCO categories, so the same class mapping applies.
 ## Usage
 
 ```bash
-python detection_train.py \
-    --train-img-dir /data/objects365/train \
-    --train-ann     /data/objects365/annotations/train.json \
-    --val-img-dir   /data/coco/val2017 \
-    --val-ann       /data/coco/annotations/instances_val2017.json \
-    --coco-o-img-dir /data/coco-o/images \
-    --coco-o-ann     /data/coco-o/annotations/coco_o.json \
-    --checkpoint    checkpoints/labelmix/model_best.pth.tar \
+python train.py --config configs/default.yaml \
+    --train-img-dir data/objects365/train \
+    --train-ann     data/objects365/annotations/train.json \
+    --val-img-dir   data/coco/val2017 \
+    --val-ann       data/coco/annotations/instances_val2017.json \
+    --coco-o-img-dir data/coco-o/images \
+    --coco-o-ann     data/coco-o/annotations/coco_o.json \
+    --checkpoint    checkpoints/base/vit/model_best.pth.tar \
     --epochs 50 \
     --lr 1e-4 \
     --batch-size 4 \
@@ -65,7 +114,7 @@ python detection_train.py \
 ## Project Structure
 
 ```
-detection/
+core/
   __init__.py            # public API
   backbone.py            # FrozenVitBackbone — frozen timm ViT
   detr_head.py           # DETRHead — transformer decoder + prediction heads
@@ -76,13 +125,15 @@ detection/
   datasets.py            # CocoFormatDataset — works with Objects365, COCO, COCO-O
   class_mapping.py       # build_category_mapping — Objects365 ↔ COCO by name
   coco_eval.py           # evaluate_coco_map — pycocotools mAP evaluation
-detection_train.py       # training entry point
-checkpoints/labelmix/    # pretrained ViT backbone weights
+train.py                 # training entry point
+evaluations/             # evaluation runners (single model + sweeps)
+checkpoints/base/        # pretrained backbone weights
+checkpoints/trained/     # trained head checkpoints + resume states
 ```
 
 ## Known Issues
 
-### 1. Docstring / implementation mismatch in `detection/losses.py`
+### 1. Docstring / implementation mismatch in `core/losses.py`
 
 The module docstring and `DetectionLoss` class docstring both reference "Focal classification loss," but `_loss_classification` actually uses `F.cross_entropy` with a weighted no-object class. The `sigmoid_focal_loss` function is defined at the top of the file but never called. The `focal_alpha` and `focal_gamma` constructor parameters are accepted but unused (dead code).
 
@@ -96,7 +147,7 @@ The module docstring and `DetectionLoss` class docstring both reference "Focal c
 
 ### 3. Missing `pytorch-image-models` dependency
 
-`detection_train.py` prepends `pytorch-image-models/` to `sys.path` (lines 30-32), but that directory does not exist in the repository. Training will fail unless either:
+`train.py` imports timm-backed models. Training will fail unless either:
 - The `pytorch-image-models` repo is cloned into the project root, or
 - `timm` is installed via `pip install timm` and the `sys.path` hack is removed.
 

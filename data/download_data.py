@@ -9,10 +9,10 @@ Two modes:
 
 Usage:
     # Download COCO val2017 (recommended for smoke test)
-    python download_data.py --dataset coco
+    python data/download_data.py --dataset coco
 
     # Download Objects365 annotations only (1k samples from HF)
-    python download_data.py --dataset objects365 --num-samples 1000
+    python data/download_data.py --dataset objects365 --num-samples 1000
 
 Requires: pip install datasets (for Objects365 HF download)
 """
@@ -30,7 +30,8 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
 
-DATA_ROOT = Path(__file__).parent / "data"
+# This file lives in `data/`, so its parent *is* the repo's data root.
+DATA_ROOT = Path(__file__).parent
 
 # ---- COCO val2017 -------------------------------------------------------- #
 
@@ -61,14 +62,20 @@ def _robust_download(url: str, dest: Path, max_retries: int = 5) -> None:
                     f.write(chunk)
                     downloaded += len(chunk)
                     pct = downloaded * 100 // total if total > 0 else 0
-                    print(f"\r  {downloaded / 1e6:.1f} / {total / 1e6:.1f} MB ({pct}%)",
-                          end="", flush=True)
+                    print(
+                        f"\r  {downloaded / 1e6:.1f} / {total / 1e6:.1f} MB ({pct}%)",
+                        end="",
+                        flush=True,
+                    )
 
             print()
             return
 
-        except (requests.ConnectionError, requests.Timeout,
-                requests.exceptions.ChunkedEncodingError) as e:
+        except (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
             _logger.warning(f"  Download interrupted (attempt {attempt}/{max_retries}): {e}")
             downloaded = dest.stat().st_size if dest.exists() else 0
             if attempt < max_retries:
@@ -148,12 +155,14 @@ def download_objects365_annotations(dest: Path, num_samples: int = 1000) -> None
 
     for sample in samples:
         img_info = sample["image_info"]
-        coco_images.append({
-            "id": img_info["id"],
-            "file_name": os.path.basename(img_info["file_name"]),
-            "width": img_info["width"],
-            "height": img_info["height"],
-        })
+        coco_images.append(
+            {
+                "id": img_info["id"],
+                "file_name": os.path.basename(img_info["file_name"]),
+                "width": img_info["width"],
+                "height": img_info["height"],
+            }
+        )
 
         for ann in sample["anns_info"]:
             cat_id = ann["category_id"]
@@ -164,19 +173,20 @@ def download_objects365_annotations(dest: Path, num_samples: int = 1000) -> None
             w = x2 - x1
             h = y2 - y1
 
-            coco_annotations.append({
-                "id": ann_id_counter,
-                "image_id": ann["image_id"],
-                "category_id": cat_id,
-                "bbox": [round(x1, 2), round(y1, 2), round(w, 2), round(h, 2)],
-                "area": round(ann["area"], 2),
-                "iscrowd": ann["iscrowd"],
-            })
+            coco_annotations.append(
+                {
+                    "id": ann_id_counter,
+                    "image_id": ann["image_id"],
+                    "category_id": cat_id,
+                    "bbox": [round(x1, 2), round(y1, 2), round(w, 2), round(h, 2)],
+                    "area": round(ann["area"], 2),
+                    "iscrowd": ann["iscrowd"],
+                }
+            )
             ann_id_counter += 1
 
     coco_categories = [
-        {"id": cat_id, "name": name}
-        for cat_id, name in sorted(categories_seen.items())
+        {"id": cat_id, "name": name} for cat_id, name in sorted(categories_seen.items())
     ]
 
     coco_json = {
@@ -189,8 +199,10 @@ def download_objects365_annotations(dest: Path, num_samples: int = 1000) -> None
         json.dump(coco_json, f)
 
     _logger.info(f"Objects365 annotations saved to {ann_file}")
-    _logger.info(f"  {len(coco_images)} images, {len(coco_annotations)} annotations, "
-                 f"{len(coco_categories)} categories")
+    _logger.info(
+        f"  {len(coco_images)} images, {len(coco_annotations)} annotations, "
+        f"{len(coco_categories)} categories"
+    )
     _logger.info(f"  NOTE: Images must be placed in {img_dir}/ manually")
     _logger.info(f"  Expected filenames: {coco_images[0]['file_name']}, ...")
 
@@ -199,11 +211,19 @@ def download_objects365_annotations(dest: Path, num_samples: int = 1000) -> None
 
 def main():
     parser = argparse.ArgumentParser(description="Download data for detection smoke test")
-    parser.add_argument("--dataset", type=str, default="coco",
-                        choices=["coco", "objects365"],
-                        help="Which dataset to download")
-    parser.add_argument("--num-samples", type=int, default=1000,
-                        help="Number of Objects365 samples to stream (default: 1000)")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="coco",
+        choices=["coco", "objects365"],
+        help="Which dataset to download",
+    )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=1000,
+        help="Number of Objects365 samples to stream (default: 1000)",
+    )
     args = parser.parse_args()
 
     if args.dataset == "coco":
@@ -214,3 +234,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
