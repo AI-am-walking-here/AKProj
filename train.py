@@ -3,16 +3,16 @@
 Train on Objects365, evaluate COCO mAP on COCO and COCO-O.
 
 Usage:
-    python detection_train.py --config configs/default.yaml
+    python train.py --config configs/default.yaml
 
     CLI flags override YAML values:
-    python detection_train.py --config configs/default.yaml --lr 1e-4 --batch-size 8
+    python train.py --config configs/default.yaml --lr 1e-4 --batch-size 8
 
     CNN backbone:
-    python detection_train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
+    python train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
 
     Resume from checkpoint:
-    python detection_train.py --config configs/default.yaml --resume output/detection/checkpoint_epoch_30.pth
+    python train.py --config configs/default.yaml --resume checkpoints_trained/vit/checkpoint_epoch_30.pth
 
 Requires: pip install timm (see requirements.txt).
 """
@@ -27,7 +27,7 @@ import torch.optim as optim
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from detection import (
+from core import (
     DetectionModel,
     DetectionLoss,
     HungarianMatcher,
@@ -36,9 +36,9 @@ from detection import (
     build_category_mapping,
     evaluate_coco_map,
 )
-from detection.config import load_config
-from detection.det_model import build_detection_model
-from detection.transforms import build_transforms
+from core.config import load_config
+from core.det_model import build_detection_model
+from core.transforms import build_transforms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
@@ -270,6 +270,8 @@ def main():
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, step_size=cfg.training.lr_drop, gamma=0.1,
         )
+    # NOTE: training.warmup_steps is defined in config but not yet implemented.
+    # The scheduler above takes effect from epoch 1 with no linear warmup ramp.
 
     # ---- mixed precision ----
     use_amp = getattr(cfg.training, "amp", False) and device.type == "cuda"
@@ -333,6 +335,9 @@ def main():
                 target_label_to_cat_id=target_label_to_cat_id,
                 source_to_target_label=source_to_target,
                 device=device,
+                score_threshold=cfg.eval.score_threshold,
+                max_detections=cfg.eval.max_detections,
+                cls_type=cfg.loss.cls_type,
             )
             _logger.info(
                 f"  COCO  AP={coco_metrics['AP']:.4f}  "
@@ -363,6 +368,9 @@ def main():
                 target_label_to_cat_id=target_label_to_cat_id,
                 source_to_target_label=source_to_target,
                 device=device,
+                score_threshold=cfg.eval.score_threshold,
+                max_detections=cfg.eval.max_detections,
+                cls_type=cfg.loss.cls_type,
             )
             _logger.info(
                 f"  COCO-O  AP={coco_o_metrics['AP']:.4f}  "

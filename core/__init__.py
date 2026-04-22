@@ -9,6 +9,7 @@ from .datasets import CocoFormatDataset, collate_fn
 from .class_mapping import build_category_mapping, save_mapping, load_mapping
 from .coco_eval import evaluate_coco_map, run_coco_evaluation
 from .config import load_config, Config
+from .metrics import compute_per_class_ap, build_results_table
 
 __all__ = [
     "FrozenVitBackbone",
@@ -26,6 +27,8 @@ __all__ = [
     "load_mapping",
     "evaluate_coco_map",
     "run_coco_evaluation",
+    "compute_per_class_ap",
+    "build_results_table",
     "load_config",
     "Config",
 ]

@@ -1,5 +1,17 @@
 # Training checkpoints and weights
 checkpoints/
+checkpoints_base/
+checkpoints_trained/
+*.pth
+*.pth.tar
+*.pt
+*.ckpt
+*.tar
+
+# Python cache / bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
 
 # Datasets (download separately)
 data/

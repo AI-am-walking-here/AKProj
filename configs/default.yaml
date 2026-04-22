@@ -1,7 +1,7 @@
 # ============================================================================
 # Default detection training config
 #
-# Usage:  python detection_train.py --config configs/default.yaml
+# Usage:  python train.py --config configs/default.yaml
 #
 # To experiment: copy this file, change what you need, run with --config.
 # CLI args (--lr, --batch-size, etc.) override values in this file.
@@ -13,12 +13,12 @@
 # Example CNN config:
 #   type: cnn
 #   name: resnet50
-#   checkpoint: checkpoints/resnet/model_best.pth.tar
+#   checkpoint: checkpoints_base/cnn/model_best.pth.tar
 #   pretrained: true
 backbone:
   type: vit                                       # backbone family [vit, cnn]
   name: vit_base_patch16_rope_reg1_gap_256        # timm registry name
-  checkpoint: checkpoints/labelmix/model_best.pth.tar
+  checkpoint: checkpoints_base/vit/model_best.pth.tar
   pretrained: false
   img_size: 256
 
@@ -39,8 +39,8 @@ data:
   train_ann: data/objects365/annotations/train.json
   val_img_dir: data/coco/val2017
   val_ann: data/coco/annotations/instances_val2017.json
-  coco_o_img_dir: null      # e.g. data/coco-o/images
-  coco_o_ann: null          # e.g. data/coco-o/annotations/coco_o.json
+  coco_o_img_dir: null      # set to data/coco-o/images once downloaded
+  coco_o_ann: null          # set to data/coco-o/annotations/coco_o.json once downloaded
   num_classes: null          # auto-detected from training annotations if null
 
 # ---------- augmentation (training only) ----------
@@ -75,11 +75,11 @@ training:
   weight_decay: 0.05         # DINOv3: 0.05
   lr_schedule: step           # [step, cosine]
   lr_drop: 40                # epoch to drop LR (step schedule)
-  warmup_steps: 1000
+  warmup_steps: 1000         # NOTE: not yet implemented in training loop
   max_grad_norm: 0.1
   num_workers: 4
   amp: true                  # mixed precision (float16) — ~2x faster, half memory
-  resume: null               # path to checkpoint to resume from (e.g. output/detection/checkpoint_epoch_30.pth)
+  resume: null               # path to checkpoint to resume from (e.g. checkpoints_trained/vit/checkpoint_epoch_30.pth)
 
 # ---------- evaluation ----------
 eval:
@@ -89,7 +89,7 @@ eval:
 
 # ---------- output ----------
 output:
-  dir: output/detection
+  dir: checkpoints_trained/vit   # trained head checkpoints saved here
   log_interval: 50
   save_interval: 5
 

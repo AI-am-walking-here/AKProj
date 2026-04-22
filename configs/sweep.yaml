@@ -1,0 +1,59 @@
+# ============================================================================
+# Multi-model evaluation sweep configuration
+#
+# Usage:
+#   python sweep_eval.py --sweep configs/sweep.yaml --output results/
+#
+# Each entry under `models` defines one model to evaluate. The sweep script
+# runs them sequentially and writes a combined comparison table in
+# CSV, Markdown, and LaTeX formats (DINOv3 Table 4 layout).
+# ============================================================================
+
+# Shared settings applied to all models unless overridden per-model.
+defaults:
+  batch_size: 8
+  num_workers: 4
+  per_class: false
+  formats: ["csv", "markdown", "latex"]
+  table_output: results/comparison_table   # base path — extensions added automatically
+
+models:
+  # ---- ViT backbone (from lab mate) ----
+  - name: "ViT-B DETR"
+    config: configs/default.yaml
+    checkpoint: checkpoints_trained/vit/best.pth
+    backbone_type: vit
+
+    # Dataset to evaluate on
+    dataset: coco
+    train_ann: data/objects365/annotations/train.json    # source domain (for label remapping)
+    ann_file: data/coco/annotations/instances_val2017.json
+    img_dir: data/coco/val2017
+
+    # Individual result file
+    output: results/vit_coco.json
+
+  # ---- CNN backbone (from lab mate) ----
+  - name: "CNN DETR"
+    config: configs/cnn.yaml                            # copy default.yaml and set backbone.type: cnn
+    checkpoint: checkpoints_trained/cnn/best.pth
+    backbone_type: cnn
+
+    dataset: coco
+    train_ann: data/objects365/annotations/train.json
+    ann_file: data/coco/annotations/instances_val2017.json
+    img_dir: data/coco/val2017
+
+    output: results/cnn_coco.json
+
+  # ---- Optional: COCO-O robustness evaluation (ViT) ----
+  # Uncomment once data/coco-o/ is populated (run download_data.py with coco-o flag).
+  # - name: "ViT-B DETR (COCO-O)"
+  #   config: configs/default.yaml
+  #   checkpoint: checkpoints_trained/vit/best.pth
+  #   backbone_type: vit
+  #   dataset: coco-o
+  #   train_ann: data/objects365/annotations/train.json
+  #   ann_file: data/coco-o/annotations/coco_o.json
+  #   img_dir: data/coco-o/images
+  #   output: results/vit_coco_o.json
