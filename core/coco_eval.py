@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+from .metrics.coco_metrics import run_coco_evaluation  # noqa: F401  re-exported for backward compat
+
 _logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,7 @@ def predictions_to_coco_results(
     source_to_target_label: Optional[Dict[int, int]] = None,
     score_threshold: float = 0.01,
     max_detections: int = 100,
+    cls_type: str = "focal",
 ) -> List[Dict]:
     """Convert a batch of model outputs to COCO result dicts.
 
@@ -53,6 +56,9 @@ def predictions_to_coco_results(
         source_to_target_label: Optional source→target label remap.
         score_threshold: Minimum confidence to keep a prediction.
         max_detections: Maximum predictions per image.
+        cls_type: ``"focal"`` (sigmoid, independent per-class scores) or
+            ``"cross_entropy"`` (softmax over all classes including background).
+            Must match the loss used during training.
 
     Returns:
         List of ``{"image_id", "category_id", "bbox", "score"}`` dicts
@@ -62,7 +68,14 @@ def predictions_to_coco_results(
     num_fg = C_plus_1 - 1
     device = pred_logits.device
 
-    probs = F.softmax(pred_logits, dim=-1)[:, :, :num_fg]  # drop background
+    if cls_type == "focal":
+        # Sigmoid focal loss: each class is an independent binary classifier.
+        # The last logit channel is unused background — slice it off before sigmoid.
+        probs = torch.sigmoid(pred_logits[:, :, :num_fg])   # (B, Q, num_fg)
+    else:
+        # Softmax cross-entropy: background is the final class; slice after softmax.
+        probs = F.softmax(pred_logits, dim=-1)[:, :, :num_fg]
+
     scores, labels = probs.max(dim=-1)                      # (B, Q)
 
     if source_to_target_label is not None:
@@ -126,6 +139,7 @@ def evaluate_coco_map(
     device: torch.device = torch.device("cpu"),
     score_threshold: float = 0.01,
     max_detections: int = 100,
+    cls_type: str = "focal",
 ) -> Dict[str, float]:
     """Run model on *data_loader* and compute COCO mAP against *ann_file*.
 
@@ -140,6 +154,9 @@ def evaluate_coco_map(
         device: Torch device.
         score_threshold: Min score for predictions.
         max_detections: Max predictions per image.
+        cls_type: ``"focal"`` or ``"cross_entropy"`` — must match the
+            loss used during training. Controls whether sigmoid or softmax
+            is applied to raw logits at inference time.
 
     Returns:
         Dict of COCO metrics (AP, AP50, AP75, …).
@@ -163,43 +180,8 @@ def evaluate_coco_map(
             source_to_target_label=source_to_target_label,
             score_threshold=score_threshold,
             max_detections=max_detections,
+            cls_type=cls_type,
         )
         all_results.extend(batch_results)
 
     return run_coco_evaluation(all_results, ann_file)
-
-
-def run_coco_evaluation(
-    results: List[Dict],
-    ann_file: str,
-    iou_type: str = "bbox",
-) -> Dict[str, float]:
-    """Evaluate a list of COCO-format result dicts against ground truth.
-
-    Returns:
-        Dict with AP, AP50, AP75, AP_small, AP_medium, AP_large,
-        AR@1, AR@10, AR@100, AR_small, AR_medium, AR_large.
-    """
-    from pycocotools.coco import COCO
-    from pycocotools.cocoeval import COCOeval
-
-    coco_gt = COCO(ann_file)
-
-    metric_names = [
-        "AP", "AP50", "AP75",
-        "AP_small", "AP_medium", "AP_large",
-        "AR@1", "AR@10", "AR@100",
-        "AR_small", "AR_medium", "AR_large",
-    ]
-
-    if not results:
-        _logger.warning("No predictions — returning zero metrics")
-        return {n: 0.0 for n in metric_names}
-
-    coco_dt = coco_gt.loadRes(results)
-    coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
-    coco_eval.evaluate()
-    coco_eval.accumulate()
-    coco_eval.summarize()
-
-    return {n: float(v) for n, v in zip(metric_names, coco_eval.stats)}

@@ -3,27 +3,31 @@
 Train on Objects365, evaluate COCO mAP on COCO and COCO-O.
 
 Usage:
-    python detection_train.py --config configs/default.yaml
+    python train.py --config configs/default.yaml
 
     CLI flags override YAML values:
-    python detection_train.py --config configs/default.yaml --lr 1e-4 --batch-size 8
+    python train.py --config configs/default.yaml --lr 1e-4 --batch-size 8
 
     CNN backbone:
-    python detection_train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
+    python train.py --config configs/default.yaml --backbone-type cnn --backbone resnet50
+
+    Resume from checkpoint:
+    python train.py --config configs/default.yaml --resume checkpoints/trained/vit/checkpoint_epoch_30.pth
 
 Requires: pip install timm (see requirements.txt).
 """
 import logging
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from detection import (
+from core import (
     DetectionModel,
     DetectionLoss,
     HungarianMatcher,
@@ -32,8 +36,10 @@ from detection import (
     build_category_mapping,
     evaluate_coco_map,
 )
-from detection.config import load_config
-from detection.det_model import build_detection_model
+from core.config import load_config
+from core.det_model import build_detection_model
+from core.telemetry import build_sink
+from core.transforms import build_transforms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _logger = logging.getLogger(__name__)
@@ -52,8 +58,10 @@ def train_one_epoch(
     epoch: int,
     max_grad_norm: float = 0.1,
     log_interval: int = 50,
+    scaler: Optional[GradScaler] = None,
 ) -> Dict[str, float]:
     model.train()
+    use_amp = scaler is not None
     total_loss = 0.0
     total_cls = 0.0
     total_bbox = 0.0
@@ -64,15 +72,24 @@ def train_one_epoch(
         images = images.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(images)
-        loss_dict = criterion(outputs, targets)
-        loss = loss_dict["loss"]
+        with autocast("cuda", enabled=use_amp):
+            outputs = model(images)
+            loss_dict = criterion(outputs, targets)
+            loss = loss_dict["loss"]
 
         optimizer.zero_grad()
-        loss.backward()
-        if max_grad_norm > 0:
-            nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
-        optimizer.step()
+        if use_amp:
+            scaler.scale(loss).backward()
+            if max_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm > 0:
+                nn.utils.clip_grad_norm_(model.trainable_parameters(), max_grad_norm)
+            optimizer.step()
 
         total_loss += loss.item()
         total_cls += loss_dict["loss_cls"].item()
@@ -106,14 +123,21 @@ def main():
     output_dir = Path(cfg.output.dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    sink = build_sink(cfg)
+
     # ---- training dataset (Objects365) ----
     if not cfg.data.train_img_dir or not cfg.data.train_ann:
         raise ValueError("--train-img-dir and --train-ann are required (or set in YAML)")
+
+    aug_cfg = cfg.augmentation.to_dict() if hasattr(cfg, "augmentation") else {}
+    train_transform = build_transforms(aug_cfg, img_size=cfg.backbone.img_size, training=True)
+    eval_transform = build_transforms(img_size=cfg.backbone.img_size, training=False)
 
     train_dataset = CocoFormatDataset(
         img_dir=cfg.data.train_img_dir,
         ann_file=cfg.data.train_ann,
         img_size=cfg.backbone.img_size,
+        transform=train_transform,
     )
     num_classes = cfg.data.num_classes or train_dataset.num_classes
     _logger.info(f"Training classes: {num_classes}")
@@ -149,6 +173,7 @@ def main():
             img_dir=cfg.data.val_img_dir,
             ann_file=cfg.data.val_ann,
             img_size=cfg.backbone.img_size,
+            transform=eval_transform,
         )
         coco_loader = DataLoader(
             coco_dataset,
@@ -175,6 +200,7 @@ def main():
             img_dir=cfg.data.coco_o_img_dir,
             ann_file=cfg.data.coco_o_ann,
             img_size=cfg.backbone.img_size,
+            transform=eval_transform,
         )
         coco_o_loader = DataLoader(
             coco_o_dataset,
@@ -247,11 +273,37 @@ def main():
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, step_size=cfg.training.lr_drop, gamma=0.1,
         )
+    # NOTE: training.warmup_steps is defined in config but not yet implemented.
+    # The scheduler above takes effect from epoch 1 with no linear warmup ramp.
+
+    # ---- mixed precision ----
+    use_amp = getattr(cfg.training, "amp", False) and device.type == "cuda"
+    scaler = GradScaler("cuda") if use_amp else None
+    _logger.info(f"Mixed precision (AMP): {'enabled' if use_amp else 'disabled'}")
+
+    # ---- resume from checkpoint ----
+    start_epoch = 1
+    best_ap = -1.0
+    resume_path = getattr(cfg.training, "resume", None)
+
+    if resume_path is not None:
+        _logger.info(f"Resuming from checkpoint: {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+
+        model.head.load_state_dict(ckpt["head_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+
+        if "scaler_state_dict" in ckpt and scaler is not None:
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
+
+        start_epoch = ckpt["epoch"] + 1
+        best_ap = ckpt.get("best_ap", -1.0)
+
+        _logger.info(f"  Resumed at epoch {start_epoch}, best_ap={best_ap:.4f}")
 
     # ---- training loop ----
-    best_ap = -1.0
-
-    for epoch in range(1, cfg.training.epochs + 1):
+    for epoch in range(start_epoch, cfg.training.epochs + 1):
         t0 = time.time()
 
         train_metrics = train_one_epoch(
@@ -263,6 +315,7 @@ def main():
             epoch=epoch,
             max_grad_norm=cfg.training.max_grad_norm,
             log_interval=cfg.output.log_interval,
+            scaler=scaler,
         )
         scheduler.step()
         elapsed = time.time() - t0
@@ -272,6 +325,8 @@ def main():
             f"train_loss={train_metrics['train_loss']:.4f}  "
             f"lr={scheduler.get_last_lr()[0]:.2e}"
         )
+        sink.log_metrics(train_metrics, step=epoch, namespace="train")
+        sink.log_metrics({"lr": float(scheduler.get_last_lr()[0])}, step=epoch, namespace="opt")
 
         # ---- COCO mAP evaluation ----
         run_eval = (epoch % cfg.eval.interval == 0) or (epoch == cfg.training.epochs)
@@ -285,23 +340,29 @@ def main():
                 target_label_to_cat_id=target_label_to_cat_id,
                 source_to_target_label=source_to_target,
                 device=device,
+                score_threshold=cfg.eval.score_threshold,
+                max_detections=cfg.eval.max_detections,
+                cls_type=cfg.loss.cls_type,
             )
             _logger.info(
                 f"  COCO  AP={coco_metrics['AP']:.4f}  "
                 f"AP50={coco_metrics['AP50']:.4f}  "
                 f"AP75={coco_metrics['AP75']:.4f}"
             )
+            sink.log_metrics(coco_metrics, step=epoch, namespace="coco")
 
             if coco_metrics["AP"] > best_ap:
                 best_ap = coco_metrics["AP"]
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "head_state_dict": model.head.state_dict(),
-                        "ap": best_ap,
-                    },
-                    output_dir / "best.pth",
-                )
+                best_data = {
+                    "epoch": epoch,
+                    "head_state_dict": model.head.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_ap": best_ap,
+                }
+                if scaler is not None:
+                    best_data["scaler_state_dict"] = scaler.state_dict()
+                torch.save(best_data, output_dir / "best.pth")
                 _logger.info(f"  -> New best AP={best_ap:.4f}, saved best.pth")
 
         if run_eval and coco_o_loader is not None:
@@ -313,21 +374,32 @@ def main():
                 target_label_to_cat_id=target_label_to_cat_id,
                 source_to_target_label=source_to_target,
                 device=device,
+                score_threshold=cfg.eval.score_threshold,
+                max_detections=cfg.eval.max_detections,
+                cls_type=cfg.loss.cls_type,
             )
             _logger.info(
                 f"  COCO-O  AP={coco_o_metrics['AP']:.4f}  "
                 f"AP50={coco_o_metrics['AP50']:.4f}  "
                 f"AP75={coco_o_metrics['AP75']:.4f}"
             )
+            sink.log_metrics(coco_o_metrics, step=epoch, namespace="coco_o")
 
-        # ---- periodic checkpoint ----
+        # ---- periodic checkpoint (full training state for resume) ----
         if epoch % cfg.output.save_interval == 0:
-            torch.save(
-                {"epoch": epoch, "head_state_dict": model.head.state_dict()},
-                output_dir / f"checkpoint_epoch_{epoch}.pth",
-            )
+            ckpt_data = {
+                "epoch": epoch,
+                "head_state_dict": model.head.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_ap": best_ap,
+            }
+            if scaler is not None:
+                ckpt_data["scaler_state_dict"] = scaler.state_dict()
+            torch.save(ckpt_data, output_dir / f"checkpoint_epoch_{epoch}.pth")
 
     _logger.info(f"Training complete.  Best COCO AP={best_ap:.4f}")
+    sink.finish()
 
 
 if __name__ == "__main__":

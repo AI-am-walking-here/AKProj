@@ -83,11 +83,22 @@ _CLI_TO_YAML = {
     "lr_drop":          "training.lr_drop",
     "max_grad_norm":    "training.max_grad_norm",
     "num_workers":      "training.num_workers",
+    "amp":              "training.amp",
+    "no_amp":           "training.amp",        # inverted bool
+    "resume":           "training.resume",
     "eval_interval":    "eval.interval",
     "output_dir":       "output.dir",
     "log_interval":     "output.log_interval",
     "save_interval":    "output.save_interval",
     "device":           "device",
+    # wandb
+    "wandb":            "wandb.enabled",
+    "wandb_project":    "wandb.project",
+    "wandb_entity":     "wandb.entity",
+    "wandb_run_name":   "wandb.run_name",
+    "wandb_mode":       "wandb.mode",
+    "wandb_no_tables":  "wandb.log_tables",  # inverted bool
+    "wandb_no_files":   "wandb.log_files",   # inverted bool
 }
 
 
@@ -147,6 +158,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     p.add_argument("--lr-drop", type=int, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
     p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--amp", action="store_true", default=None,
+                   help="Enable mixed precision training")
+    p.add_argument("--no-amp", action="store_true", default=None,
+                   help="Disable mixed precision training")
+    p.add_argument("--resume", type=str, default=None,
+                   help="Path to checkpoint to resume training from")
 
     # eval
     p.add_argument("--eval-interval", type=int, default=None)
@@ -158,6 +175,19 @@ def build_cli_parser() -> argparse.ArgumentParser:
 
     # device
     p.add_argument("--device", type=str, default=None)
+
+    # wandb (optional)
+    p.add_argument("--wandb", action="store_true", default=None,
+                   help="Enable Weights & Biases logging (requires `pip install wandb`)")
+    p.add_argument("--wandb-project", type=str, default=None)
+    p.add_argument("--wandb-entity", type=str, default=None)
+    p.add_argument("--wandb-run-name", type=str, default=None)
+    p.add_argument("--wandb-mode", type=str, default=None,
+                   choices=["online", "offline", "disabled"])
+    p.add_argument("--wandb-no-tables", action="store_true", default=None,
+                   help="Disable W&B table logging")
+    p.add_argument("--wandb-no-files", action="store_true", default=None,
+                   help="Disable W&B file logging (csv/md/tex artifacts)")
 
     return p
 
@@ -177,15 +207,28 @@ def load_config(argv: Optional[list] = None) -> Config:
                  "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100, "aux_loss": True},
         "data": {"train_img_dir": None, "train_ann": None, "val_img_dir": None,
                  "val_ann": None, "coco_o_img_dir": None, "coco_o_ann": None, "num_classes": None},
+        "augmentation": {"horizontal_flip": True, "color_jitter": False,
+                         "multiscale": None, "random_crop": False, "crop_min_scale": 0.5},
         "loss": {"cls_type": "focal", "focal_alpha": 0.25, "focal_gamma": 2.0,
                  "weight_cls": 2.0, "weight_bbox": 1.0, "weight_giou": 2.0, "eos_coef": 0.1},
         "matcher": {"cost_class": 2.0, "cost_bbox": 5.0, "cost_giou": 2.0},
         "training": {"epochs": 50, "batch_size": 4, "lr": 5e-5, "weight_decay": 0.05,
                       "lr_schedule": "step", "lr_drop": 40, "warmup_steps": 1000,
-                      "max_grad_norm": 0.1, "num_workers": 4},
+                      "max_grad_norm": 0.1, "num_workers": 4, "amp": True,
+                      "resume": None},
         "eval": {"interval": 1, "score_threshold": 0.01, "max_detections": 100},
         "output": {"dir": "output/detection", "log_interval": 50, "save_interval": 5},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "wandb": {
+            "enabled": False,
+            "project": None,
+            "entity": None,
+            "run_name": None,
+            "tags": [],
+            "mode": None,
+            "log_tables": True,
+            "log_files": True,
+        },
     }
 
     if args.config is not None:
@@ -199,7 +242,7 @@ def load_config(argv: Optional[list] = None) -> Config:
         val = cli_dict.get(cli_key)
         if val is None:
             continue
-        if cli_key == "no_aux_loss":
+        if cli_key in ("no_aux_loss", "no_amp", "wandb_no_tables", "wandb_no_files"):
             val = not val
         _set_nested(defaults, yaml_path, val)
 
