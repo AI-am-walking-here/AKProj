@@ -34,10 +34,12 @@ AKProj/
 │  └─ transforms.py
 │
 ├─ data/
-│  ├─ coco/                      # COCO goes here (images + annotations) (ignored by git)
-│  ├─ coco-o/                    # COCO-O goes here (ignored by git)
-│  ├─ objects365/                # Objects365 goes here (ignored by git)
-│  └─ download_data.py           # downloads COCO val2017 (and Objects365 ann-only)
+│  ├─ coco/                      # COCO val2017 (ignored by git)
+│  ├─ coco-o/                    # COCO-O subset (ignored by git)
+│  ├─ objects365/                # Objects365 subset (ignored by git)
+│  ├─ download_coco.py           # COCO val2017 (5000 images + instances_val2017.json)
+│  ├─ download_coco_o.py         # COCO-O subset (takes --zip path to manual download)
+│  └─ download_objects365.py     # Objects365 subset (patch0 images + HF annotations)
 │
 ├─ evaluations/
 │  ├─ __pycache__/
@@ -93,6 +95,25 @@ The model trains with `num_classes=365` (auto-detected from Objects365 annotatio
 At eval time, `build_category_mapping` matches Objects365 categories to COCO's 80 categories by name (case-insensitive, with an alias table for known mismatches like `"Stuffed Toy" → "teddy bear"`). Predictions for unmapped classes are dropped. COCO mAP is computed via `pycocotools`.
 
 COCO-O uses the same 80 COCO categories, so the same class mapping applies.
+
+## Data Download
+
+Each dataset has its own self-contained script. All three target ~5000 samples.
+
+```bash
+# COCO val2017 (evaluation) — downloads images + instances_val2017.json
+python data/download_coco.py
+
+# COCO-O (evaluation) — download the zip manually from alibaba/easyrobust
+# (https://github.com/alibaba/easyrobust/tree/main/benchmarks/coco_o), then:
+python data/download_coco_o.py --zip path/to/coco_o.zip
+
+# Objects365 (training) — streams patch0 tarball + HF annotations
+pip install datasets
+python data/download_objects365.py
+```
+
+Outputs land at the paths the training command below expects.
 
 ## Usage
 
