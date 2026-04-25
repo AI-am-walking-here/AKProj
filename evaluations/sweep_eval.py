@@ -152,7 +152,7 @@ def run_sweep(
                     "aux_loss": True,
                 },
                 "loss": {"cls_type": "focal"},
-                "eval": {"score_threshold": 0.01, "max_detections": 100},
+                "eval": {"score_threshold": 0.0, "max_detections": 100},
                 "device": "cuda" if torch.cuda.is_available() else "cpu",
             }
             with open(entry.config) as f:

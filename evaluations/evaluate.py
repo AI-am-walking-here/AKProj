@@ -73,6 +73,12 @@ def load_model_from_checkpoint(
     """
     from core.det_model import build_detection_model
 
+    cls_type = getattr(cfg.loss, "cls_type", "focal")
+    prior_prob = (
+        getattr(cfg.head, "prior_prob", 0.01)
+        if cls_type in ("focal", "ia_bce")
+        else None
+    )
     model = build_detection_model(
         backbone_type=cfg.backbone.type,
         model_name=cfg.backbone.name,
@@ -87,6 +93,7 @@ def load_model_from_checkpoint(
         dim_feedforward=cfg.head.dim_feedforward,
         dropout=cfg.head.dropout,
         aux_loss=False,  # aux_loss not needed at inference
+        prior_prob=prior_prob,
     )
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -193,7 +200,7 @@ def run_full_evaluation(
     from core.metrics import run_coco_evaluation, compute_per_class_ap
 
     cls_type = getattr(cfg.loss, "cls_type", "focal")
-    score_threshold = getattr(cfg.eval, "score_threshold", 0.01)
+    score_threshold = getattr(cfg.eval, "score_threshold", 0.0)
     max_detections = getattr(cfg.eval, "max_detections", 100)
 
     model.eval()
@@ -335,9 +342,10 @@ def main(argv=None) -> None:
         "backbone": {"type": "vit", "name": "vit_base_patch16_rope_reg1_gap_256",
                      "checkpoint": None, "pretrained": False, "img_size": 256},
         "head": {"type": "detr", "d_model": 256, "nhead": 8, "num_decoder_layers": 6,
-                 "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100, "aux_loss": True},
+                 "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100,
+                 "aux_loss": True, "prior_prob": 0.01},
         "loss": {"cls_type": "focal"},
-        "eval": {"score_threshold": 0.01, "max_detections": 100},
+        "eval": {"score_threshold": 0.0, "max_detections": 100},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     }
     with open(args.config) as f:

@@ -41,7 +41,7 @@ def predictions_to_coco_results(
     orig_sizes: Tensor,
     label_to_cat_id: Dict[int, int],
     source_to_target_label: Optional[Dict[int, int]] = None,
-    score_threshold: float = 0.01,
+    score_threshold: float = 0.0,
     max_detections: int = 100,
     cls_type: str = "focal",
 ) -> List[Dict]:
@@ -55,8 +55,10 @@ def predictions_to_coco_results(
         label_to_cat_id: target label index → COCO category ID.
         source_to_target_label: Optional source→target label remap.
         score_threshold: Minimum confidence to keep a prediction.
+            Use ``0.0`` for COCO mAP (recall over full score range); a positive
+            value can drop every detection for under-confident focal heads.
         max_detections: Maximum predictions per image.
-        cls_type: ``"focal"`` (sigmoid, independent per-class scores) or
+        cls_type: ``"focal"`` / ``"ia_bce"`` (sigmoid on foreground channels) or
             ``"cross_entropy"`` (softmax over all classes including background).
             Must match the loss used during training.
 
@@ -68,8 +70,8 @@ def predictions_to_coco_results(
     num_fg = C_plus_1 - 1
     device = pred_logits.device
 
-    if cls_type == "focal":
-        # Sigmoid focal loss: each class is an independent binary classifier.
+    if cls_type in ("focal", "ia_bce"):
+        # Sigmoid (focal / IA-BCE): each class is an independent binary classifier.
         # The last logit channel is unused background — slice it off before sigmoid.
         probs = torch.sigmoid(pred_logits[:, :, :num_fg])   # (B, Q, num_fg)
     else:
@@ -137,7 +139,7 @@ def evaluate_coco_map(
     target_label_to_cat_id: Dict[int, int],
     source_to_target_label: Optional[Dict[int, int]] = None,
     device: torch.device = torch.device("cpu"),
-    score_threshold: float = 0.01,
+    score_threshold: float = 0.0,
     max_detections: int = 100,
     cls_type: str = "focal",
 ) -> Dict[str, float]:
@@ -152,9 +154,12 @@ def evaluate_coco_map(
         source_to_target_label: Optional source→target label remap
             (needed when the model was trained on a different dataset).
         device: Torch device.
-        score_threshold: Min score for predictions.
+        score_threshold: Min score for predictions. COCO mAP integrates
+            across confidence thresholds, so 0.0 (keep top-K only) is
+            usually correct. Raising this filters away exactly the
+            predictions COCO needs to compute the recall axis.
         max_detections: Max predictions per image.
-        cls_type: ``"focal"`` or ``"cross_entropy"`` — must match the
+        cls_type: ``"focal"``, ``"ia_bce"``, or ``"cross_entropy"`` — must match the
             loss used during training. Controls whether sigmoid or softmax
             is applied to raw logits at inference time.
 
@@ -163,6 +168,10 @@ def evaluate_coco_map(
     """
     model.eval()
     all_results: List[Dict] = []
+    n_images = 0
+    score_sum = 0.0
+    score_count = 0
+    score_max = 0.0
 
     for images, targets in data_loader:
         images = images.to(device)
@@ -183,5 +192,32 @@ def evaluate_coco_map(
             cls_type=cls_type,
         )
         all_results.extend(batch_results)
+        n_images += len(image_ids)
+
+        if cls_type in ("focal", "ia_bce"):
+            probs = torch.sigmoid(outputs["pred_logits"][:, :, :-1])
+        else:
+            probs = F.softmax(outputs["pred_logits"], dim=-1)[:, :, :-1]
+        max_per_query = probs.amax(dim=-1)  # (B, Q)
+        score_sum += float(max_per_query.sum().item())
+        score_count += int(max_per_query.numel())
+        score_max = max(score_max, float(max_per_query.max().item()))
+
+    if score_count > 0:
+        mean_score = score_sum / score_count
+        kept_per_image = len(all_results) / max(n_images, 1)
+        _logger.info(
+            "Eval diagnostics: %d images, %d preds kept (%.2f/img), "
+            "mean_top1_score=%.4f, max_top1_score=%.4f, score_threshold=%.4g",
+            n_images, len(all_results), kept_per_image,
+            mean_score, score_max, score_threshold,
+        )
+        if not all_results:
+            _logger.warning(
+                "ZERO predictions kept — likely score_threshold (%.4g) > all "
+                "model scores (max=%.4f). Lower score_threshold or check "
+                "training (focal loss requires prior_prob bias init).",
+                score_threshold, score_max,
+            )
 
     return run_coco_evaluation(all_results, ann_file)

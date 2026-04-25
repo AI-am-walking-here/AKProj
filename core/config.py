@@ -204,7 +204,8 @@ def load_config(argv: Optional[list] = None) -> Config:
         "backbone": {"type": "vit", "name": "vit_base_patch16_rope_reg1_gap_256",
                       "checkpoint": None, "pretrained": False, "img_size": 256},
         "head": {"type": "detr", "d_model": 256, "nhead": 8, "num_decoder_layers": 6,
-                 "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100, "aux_loss": True},
+                 "dim_feedforward": 2048, "dropout": 0.1, "num_queries": 100,
+                 "aux_loss": True, "prior_prob": 0.01},
         "data": {"train_img_dir": None, "train_ann": None, "val_img_dir": None,
                  "val_ann": None, "coco_o_img_dir": None, "coco_o_ann": None, "num_classes": None},
         "augmentation": {"horizontal_flip": True, "color_jitter": False,
@@ -216,7 +217,7 @@ def load_config(argv: Optional[list] = None) -> Config:
                       "lr_schedule": "step", "lr_drop": 40, "warmup_steps": 1000,
                       "max_grad_norm": 0.1, "num_workers": 4, "amp": True,
                       "resume": None},
-        "eval": {"interval": 1, "score_threshold": 0.01, "max_detections": 100},
+        "eval": {"interval": 1, "score_threshold": 0.0, "max_detections": 100},
         "output": {"dir": "output/detection", "log_interval": 50, "save_interval": 5},
         "device": "cuda" if torch.cuda.is_available() else "cpu",
         "wandb": {

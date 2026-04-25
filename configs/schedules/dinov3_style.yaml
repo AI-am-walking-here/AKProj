@@ -1,0 +1,191 @@
+# =============================================================================
+# DINOv3 detection transfer — 3-stage curriculum
+#
+# Mirrors the protocol from DINOv3 §6.3.1 + Appendix D.9:
+#
+#   Stage 1 (obj365_lowres):   Objects365, 22 epochs, lr 5e-5, 1000-step warmup,
+#                              step decay /10 at epoch 20. Focal Loss.
+#   Stage 2 (obj365_highres):  Objects365,  4 epochs, lr 2.5e-5, constant.
+#                              Same losses as stage 1.
+#   Stage 3 (coco_finetune):   COCO,       12 epochs, lr 2.5e-5 -> 2.5e-6 cosine
+#                              (reaches 2.5e-6 ~epoch 8), 2000-step warmup, IA-BCE.
+#                              GIoU weight raised 2 -> 4. Classifier reset
+#                              (365-class -> 80-class) via shape-tolerant load.
+#
+# Deviations from paper (documented; these are the "20%" edges):
+#
+#   * Resolution: paper uses 1536 (stage 1) and 2048 (stages 2-3). We stay at
+#     256 throughout because the current backbone checkpoint
+#     (vit_base_patch16_rope_reg1_gap_256) has positional embeddings baked for
+#     256. Swap the backbone to unlock the full ladder.
+#   * Loss: stage 3 uses IA-BCE (Align-DETR-style; see core/losses.py). Stages 1–2
+#     use focal. GIoU weight 2 -> 4 on stage 3 per paper.
+#   * Scale: paper runs 32 GPUs @ global batch 32. We run 1 GPU @ local batch 32,
+#     which yields the same gradient signal per step (effective batch = 32).
+#     Paper LR values apply directly; no linear-scaling needed.
+#   * COCO data: paper uses full train2017 (118k). We use a 5k deterministic
+#     subset (`data/download_coco_train.py`); retarget `coco_finetune.train` to
+#     the full set if you have the disk budget.
+#
+# Run:
+#   python schedule.py --schedule configs/schedules/dinov3_style.yaml
+#   python schedule.py --schedule configs/schedules/dinov3_style.yaml --dry-run
+#   python schedule.py --schedule configs/schedules/dinov3_style.yaml --only coco_finetune
+# =============================================================================
+
+name: dinov3_style
+base_config: configs/default.yaml
+output_root: checkpoints/schedules/dinov3_style
+seed: 42
+
+# ---------------------------------------------------------------------------
+# Common overrides — apply to every stage, still overridable per stage.
+# Use this for single-point tuning of project-wide knobs.
+# ---------------------------------------------------------------------------
+common_overrides:
+  training:
+    batch_size: 32           # matches paper's global batch (1 GPU here vs 32 in paper);
+                             #   VRAM sweep: bs=32 peaks ~1.2 GB of 8.6 GB at img_size=256
+    weight_decay: 0.05       # paper §D.9
+    max_grad_norm: 0.1
+    amp: true                # fp16 mixed precision; ~2x throughput, ~half VRAM
+    num_workers: 4
+  matcher:                   # Plain-DETR / DETR defaults
+    cost_class: 2.0
+    cost_bbox: 5.0
+    cost_giou: 2.0
+  output:
+    log_interval: 50
+    save_interval: 5
+
+# ---------------------------------------------------------------------------
+# Eval suites — name-addressed, referenced by each stage.
+# ---------------------------------------------------------------------------
+eval_suites:
+  in_domain:
+    - name: coco
+      img_dir: data/coco/val2017
+      ann_file: data/coco/annotations/instances_val2017.json
+
+  robustness:
+    - name: coco_o
+      img_dir: data/coco-o/images
+      ann_file: data/coco-o/annotations/coco_o.json
+
+# ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
+stages:
+  # -----------------------------------------------------------------------
+  # Stage 1 — Objects365, low-resolution, 22 epochs
+  # Paper: 22 epochs @ 1536, warmup 1000 steps, lr 5e-5, drop /10 at epoch 20,
+  #        Focal + L1 + GIoU(w=2).
+  # -----------------------------------------------------------------------
+  - name: obj365_lowres
+    enabled: true
+    init_from: null                    # fresh head (no prior training)
+    train:
+      img_dir: data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      backbone:
+        img_size: 256                  # deviation: paper 1536 (see header)
+      training:
+        epochs: 22
+        lr: 5.0e-5
+        lr_schedule: step
+        lr_drop: 20                    # paper: drop at epoch 20 of 22
+        warmup_steps: 1000             # paper §D.9 stage 1
+      loss:
+        cls_type: focal
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 2.0
+      augmentation:
+        horizontal_flip: true          # paper: p=0.5
+        color_jitter: false
+        random_crop: true              # paper: random crop 60-100% area
+        crop_min_scale: 0.6
+        multiscale: [224, 240, 256]    # proxy for paper's random-resize 920-1536
+    eval:
+      suites: [in_domain]
+      at_epochs: [1, 10, 20, 22]
+
+  # -----------------------------------------------------------------------
+  # Stage 2 — Objects365, high-resolution, 4 epochs
+  # Paper: 4 epochs @ 2048, lr 2.5e-5, constant. Same losses as stage 1.
+  # Classifier stays at 365 (both stages are Objects365).
+  # -----------------------------------------------------------------------
+  - name: obj365_highres
+    enabled: true
+    init_from: "@prev"                 # continue Objects365 head from stage 1
+    train:
+      img_dir: data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      backbone:
+        img_size: 256                  # deviation: paper 2048 (see header)
+      training:
+        epochs: 4
+        lr: 2.5e-5
+        lr_schedule: step
+        lr_drop: 10                    # above epochs => no drop (constant LR)
+        warmup_steps: 0                # paper doesn't re-warmup here
+      loss:
+        cls_type: focal
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 2.0
+      augmentation:
+        horizontal_flip: true
+        color_jitter: false
+        random_crop: true
+        crop_min_scale: 0.6
+    eval:
+      suites: [in_domain]
+      at_epochs: [-1]                  # once, at the end of the stage
+
+  # -----------------------------------------------------------------------
+  # Stage 3 — COCO fine-tune, 12 epochs
+  # Paper: 12 epochs @ 2048, cosine 2.5e-5 -> 2.5e-6 (reaches min at epoch 8),
+  #        warmup 2000 iters, IA-BCE cls loss (cls_type ia_bce), GIoU weight 4.
+  #
+  # Label-space: Objects365 (365 classes) -> COCO (80 classes). class_head
+  # has mismatched shape; shape-tolerant init_from drops those tensors and
+  # keeps fresh xavier init. Decoder / queries / bbox_head / input_proj all
+  # transfer cleanly.
+  # -----------------------------------------------------------------------
+  - name: coco_finetune
+    enabled: true
+    init_from: "@prev"                 # classifier will be auto-reset on shape mismatch
+    train:
+      img_dir: data/coco/train2017_subset
+      ann_file: data/coco/annotations/instances_train2017_subset.json
+    overrides:
+      backbone:
+        img_size: 256                  # deviation: paper 2048 (see header)
+      training:
+        epochs: 12
+        lr: 2.5e-5
+        lr_schedule: cosine
+        lr_min_ratio: 0.1              # eta_min = lr * 0.1 = 2.5e-6 (paper §D.9)
+        warmup_steps: 2000             # paper §D.9 stage 3
+      loss:
+        cls_type: ia_bce
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 4.0               # paper §D.9: bumped to 4 for stage 3
+      augmentation:
+        horizontal_flip: true
+        color_jitter: false
+        random_crop: true
+        crop_min_scale: 0.6
+    eval:
+      suites: [in_domain, robustness]  # COCO val + COCO-O at end
+      at_epochs: [4, 8, 12]

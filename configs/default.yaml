@@ -32,6 +32,10 @@ head:
   dropout: 0.1
   num_queries: 100
   aux_loss: true
+  prior_prob: 0.01            # initial sigmoid prob the class head outputs;
+                              # bias = -log((1-p)/p). Required for sigmoid focal
+                              # loss to converge — without it the model collapses
+                              # to predicting nothing (AP=0). Ignored for CE.
 
 # ---------- data ----------
 data:
@@ -53,7 +57,7 @@ augmentation:
 
 # ---------- loss ----------
 loss:
-  cls_type: focal            # classification loss [focal, cross_entropy]
+  cls_type: focal            # [focal, ia_bce, cross_entropy] — ia_bce = Align-DETR-style IoU-aware BCE (DINOv3 COCO stage)
   focal_alpha: 0.25
   focal_gamma: 2.0
   weight_cls: 2.0            # DINOv3: 2
@@ -75,7 +79,8 @@ training:
   weight_decay: 0.05         # DINOv3: 0.05
   lr_schedule: step           # [step, cosine]
   lr_drop: 40                # epoch to drop LR (step schedule)
-  warmup_steps: 1000         # NOTE: not yet implemented in training loop
+  lr_min_ratio: 0.01         # cosine eta_min = lr * ratio (paper §D.9 uses 0.1)
+  warmup_steps: 1000         # linear warmup over first N batches (0 disables)
   max_grad_norm: 0.1
   num_workers: 4
   amp: true                  # mixed precision (float16) — ~2x faster, half memory
@@ -84,7 +89,9 @@ training:
 # ---------- evaluation ----------
 eval:
   interval: 1                # run COCO mAP every N epochs
-  score_threshold: 0.01
+  score_threshold: 0.0       # COCO mAP integrates across confidence levels —
+                             # raising this discards exactly the predictions COCO
+                             # needs for the recall axis. max_detections caps spam.
   max_detections: 100
 
 # ---------- output ----------

@@ -51,10 +51,19 @@ class HungarianMatcher(nn.Module):
     Computes a weighted cost matrix per image, then solves the
     linear assignment problem with `scipy.optimize.linear_sum_assignment`.
 
+    The classification cost MUST share its probability space with the
+    classification loss:
+
+    - ``cls_type="focal"`` or ``"ia_bce"``  → sigmoid (per-class binary). The
+      background channel is not used for cost (same as focal training).
+    - ``cls_type="cross_entropy"``  → softmax over ``C+1`` channels (the
+      original DETR formulation).
+
     Args:
         cost_class: Weight for classification cost.
         cost_bbox: Weight for L1 bounding box cost.
         cost_giou: Weight for GIoU cost.
+        cls_type: ``"focal"``, ``"ia_bce"``, or ``"cross_entropy"`` — must match the loss.
     """
 
     def __init__(
@@ -62,11 +71,17 @@ class HungarianMatcher(nn.Module):
         cost_class: float = 1.0,
         cost_bbox: float = 5.0,
         cost_giou: float = 2.0,
+        cls_type: str = "focal",
     ):
         super().__init__()
+        if cls_type not in ("focal", "ia_bce", "cross_entropy"):
+            raise ValueError(
+                f"cls_type must be 'focal', 'ia_bce', or 'cross_entropy', got '{cls_type}'"
+            )
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.cls_type = cls_type
 
     @torch.no_grad()
     def forward(
@@ -85,8 +100,15 @@ class HungarianMatcher(nn.Module):
         Returns:
             List[B] of (pred_indices, target_indices) tuples.
         """
-        B, Q = outputs["pred_logits"].shape[:2]
-        out_prob = outputs["pred_logits"].softmax(-1)  # (B, Q, C+1)
+        logits = outputs["pred_logits"]
+        B, Q, C_plus_1 = logits.shape
+        num_fg = C_plus_1 - 1
+
+        if self.cls_type in ("focal", "ia_bce"):
+            out_prob = logits[:, :, :num_fg].sigmoid()  # (B, Q, C)
+        else:
+            out_prob = logits.softmax(-1)               # (B, Q, C+1)
+
         out_bbox = outputs["pred_boxes"]  # (B, Q, 4)
 
         indices = []

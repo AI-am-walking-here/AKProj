@@ -1,0 +1,158 @@
+# ============================================================================
+# SMOKE TEST — full pipeline validation in minutes
+#
+# What this validates (in order):
+#   1. Config compilation + deep-merge across every stage
+#   2. Model build (frozen backbone loads, DETR head instantiates)
+#   3. Training step (forward + loss + backward + optimizer)
+#   4. Checkpoint I/O (save + load-from-prev via @prev)
+#   5. Evaluation loop (COCO mAP on val2017)
+#
+# Run:
+#   python schedule.py --schedule configs/schedules/smoke_test.yaml --dry-run
+#   python schedule.py --schedule configs/schedules/smoke_test.yaml --epochs 4 --max-samples 500
+#
+# Output:   checkpoints/schedules/smoke_test/<stage>/
+# Rollup:   checkpoints/schedules/smoke_test/schedule_results.json
+# ============================================================================
+
+name: smoke_test
+base_config: configs/default.yaml
+output_root: checkpoints/schedules/smoke_test
+seed: 0
+
+
+# ============================================================================
+# (1) TOGGLES — tune the whole run from here
+#
+# These settings apply to every enabled stage. Individual stages can still
+# override any of these values in their own `overrides:` block.
+#
+# Shape mirrors configs/default.yaml exactly — same keys, same nesting.
+# ============================================================================
+common_overrides:
+
+  # -------- training hyperparameters --------
+  training:
+    batch_size:    2            # samples per step (small → fast + low VRAM)
+    lr:            1.0e-4       # base learning rate
+    weight_decay:  0.05
+    lr_schedule:   cosine       # [cosine, step]
+    max_grad_norm: 0.1
+    amp:           true         # mixed precision (halves memory, ~2x throughput on CUDA)
+    num_workers:   2
+
+  # -------- backbone --------
+  backbone:
+    img_size:      256          # 256 for speed; 384 for high-res adapt
+
+  # -------- detection head --------
+  head:
+    num_queries:   100
+    dropout:       0.1
+    aux_loss:      true         # auxiliary losses at every decoder layer
+
+  # -------- loss weights (DINOv3 defaults) --------
+  loss:
+    cls_type:      focal        # [focal, ia_bce, cross_entropy]
+    weight_cls:    2.0
+    weight_bbox:   1.0
+    weight_giou:   2.0
+
+  # -------- augmentation --------
+  augmentation:
+    horizontal_flip: true
+    color_jitter:    false
+    random_crop:     false
+    multiscale:      null       # e.g. [224, 256, 288] for multi-scale training
+
+  # -------- output --------
+  output:
+    log_interval:  10           # log every N batches
+    save_interval: 1            # save checkpoint every N epochs
+
+
+# ============================================================================
+# (2) EVAL SUITES — reusable evaluation bundles, referenced by name in stages
+# ============================================================================
+eval_suites:
+
+  # Fast in-domain eval (COCO val2017)
+  quick:
+    - name:     coco
+      img_dir:  data/coco/val2017
+      ann_file: data/coco/annotations/instances_val2017.json
+
+  # Full eval (COCO + robustness) — used only when you want the OOD check too
+  full:
+    - name:     coco
+      img_dir:  data/coco/val2017
+      ann_file: data/coco/annotations/instances_val2017.json
+    - name:     coco_o
+      img_dir:  data/coco-o/images
+      ann_file: data/coco-o/annotations/coco_o.json
+
+
+# ============================================================================
+# (3) STAGES — run in order, each toggle-able via `enabled:`
+#
+# Structure per stage:
+#   enabled:     flip to skip this stage entirely
+#   init_from:   null = fresh head | "@prev" = chain from previous stage
+#   train:       training dataset (COCO-format)
+#   overrides:   per-stage hyperparam tweaks (win over common_overrides)
+#   eval:        which suites to run + which epochs to trigger them
+# ============================================================================
+stages:
+
+  # ---- Stage 1: fresh-head training ----------------------------------------
+  # Validates: model build, fresh optimizer, one full train+eval cycle.
+  - name:       fresh_head
+    enabled:    true                           # <-- TOGGLE
+    init_from:  null                           # fresh head weights
+    train:
+      img_dir:  data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      training:
+        epochs: 1                              # overridden to --epochs at CLI
+    eval:
+      suites:    [quick]
+      at_epochs: [1]                           # eval at last epoch
+
+  # ---- Stage 2: chained-head training --------------------------------------
+  # Validates: @prev resolution, head weights load from stage 1's last_epoch.pth.
+  # This is the critical scheduler plumbing check.
+  - name:       chained_head
+    enabled:    true                           # <-- TOGGLE
+    init_from:  "@prev"                        # load head from fresh_head stage
+    train:
+      img_dir:  data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      training:
+        epochs: 1
+        lr:     5.0e-5                         # stage-specific LR (overrides common)
+    eval:
+      suites:    [quick]
+      at_epochs: [1]
+
+  # ---- Stage 3: high-res adaptation (OPTIONAL) -----------------------------
+  # Validates: backbone.img_size change mid-pipeline doesn't break anything.
+  # Disabled by default (adds ~40% to smoke time due to 384 vs 256).
+  - name:       highres_check
+    enabled:    false                          # <-- TOGGLE
+    init_from:  "@prev"
+    train:
+      img_dir:  data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      backbone:
+        img_size: 384                          # switch resolution
+      training:
+        epochs:     1
+        lr:         1.0e-5
+        batch_size: 1                          # 384² needs less batch
+    eval:
+      suites:    [full]                        # includes COCO-O
+      at_epochs: [1]

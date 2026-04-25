@@ -8,6 +8,7 @@ The ViT backbone already serves as the encoder, so this module only contains
 the transformer decoder that cross-attends learnable object queries to the
 encoded features, plus the prediction FFN heads.
 """
+import math
 from typing import Dict, Optional
 
 import torch
@@ -62,6 +63,14 @@ class DETRHead(nn.Module):
             projection is added.
         aux_loss: If True, return intermediate decoder layer outputs for
             auxiliary loss computation (DETR deep supervision).
+        prior_prob: Initial sigmoid probability the class head outputs at
+            init. The classifier bias is set to ``-log((1-p)/p)`` so the
+            network starts predicting `prior_prob` for every class.
+            Critical for sigmoid focal loss — without it, the ~num_queries *
+            num_classes negative cells per batch swamp the few positives and
+            the model collapses to predicting nothing. Default ``0.01``
+            follows Deformable DETR / DINO / RT-DETR. Ignored when training
+            with cross-entropy (set to ``None`` to fall back to zero bias).
     """
 
     def __init__(
@@ -75,12 +84,14 @@ class DETRHead(nn.Module):
         dropout: float = 0.1,
         backbone_dim: int = 768,
         aux_loss: bool = True,
+        prior_prob: Optional[float] = 0.01,
     ):
         super().__init__()
         self.d_model = d_model
         self.num_queries = num_queries
         self.num_classes = num_classes
         self.aux_loss = aux_loss
+        self.prior_prob = prior_prob
 
         self.input_proj = (
             nn.Linear(backbone_dim, d_model)
@@ -119,10 +130,15 @@ class DETRHead(nn.Module):
             nn.init.xavier_uniform_(self.input_proj.weight)
             nn.init.zeros_(self.input_proj.bias)
         nn.init.xavier_uniform_(self.class_head.weight)
-        nn.init.zeros_(self.class_head.bias)
+        if self.prior_prob is not None and 0.0 < self.prior_prob < 1.0:
+            bias_value = -math.log((1.0 - self.prior_prob) / self.prior_prob)
+            nn.init.constant_(self.class_head.bias, bias_value)
+        else:
+            nn.init.zeros_(self.class_head.bias)
         for layer in self.bbox_head.layers:
             nn.init.xavier_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
+        nn.init.constant_(self.bbox_head.layers[-1].bias, 0.0)
 
     def forward(
         self,

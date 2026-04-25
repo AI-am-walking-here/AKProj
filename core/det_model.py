@@ -66,6 +66,7 @@ def build_detection_model(
     dim_feedforward: int = 2048,
     dropout: float = 0.1,
     aux_loss: bool = True,
+    prior_prob: Optional[float] = 0.01,
 ) -> DetectionModel:
     """Factory function — single call to wire backbone + head.
 
@@ -83,6 +84,9 @@ def build_detection_model(
         dim_feedforward: Decoder FFN hidden dimension.
         dropout: Decoder dropout rate.
         aux_loss: Enable auxiliary losses from intermediate decoder layers.
+        prior_prob: Initial sigmoid probability the class head outputs.
+            ``0.01`` is the Deformable-DETR / DINO standard for sigmoid
+            focal loss. Pass ``None`` for zero bias (CE training).
 
     Returns:
         Assembled DetectionModel ready for training.
@@ -111,6 +115,7 @@ def build_detection_model(
         dropout=dropout,
         backbone_dim=backbone.embed_dim,
         aux_loss=aux_loss,
+        prior_prob=prior_prob,
     )
 
     return DetectionModel(backbone=backbone, head=head)

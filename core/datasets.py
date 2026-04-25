@@ -6,13 +6,19 @@ Objects365, COCO, COCO-O, LVIS, etc.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
 _logger = logging.getLogger(__name__)
+
+# Corrupt-image handling knobs. Tuned for "fail loudly at first, then power through":
+#   - Warn on each distinct bad path the first time we see it (up to a cap).
+#   - Skip forward up to BAD_IMAGE_MAX_SKIP indices before giving up.
+BAD_IMAGE_WARN_CAP = 20
+BAD_IMAGE_MAX_SKIP = 50
 
 
 class CocoFormatDataset(Dataset):
@@ -71,10 +77,24 @@ class CocoFormatDataset(Dataset):
                 continue
             self.img_anns.setdefault(ann["image_id"], []).append(ann)
 
-        self.img_ids = [
+        candidate_ids = [
             img_id for img_id in self.images
             if img_id in self.img_anns and len(self.img_anns[img_id]) > 0
         ]
+
+        # Filter out missing / zero-byte files up front. Catches truncated downloads
+        # cheaply (no decode). Truly corrupt-but-nonzero files are handled lazily in
+        # __getitem__ so we don't pay full-decode cost here.
+        self.img_ids, skipped = self._filter_readable(candidate_ids)
+        if skipped:
+            _logger.warning(
+                f"  skipped {len(skipped)} missing/zero-byte images "
+                f"(first 3: {[s.name for s in skipped[:3]]})"
+            )
+
+        # Runtime bad-image bookkeeping (populated in __getitem__ as errors surface).
+        self._bad_indices: Set[int] = set()
+        self._bad_paths_warned: Set[str] = set()
 
         _logger.info(
             f"CocoFormatDataset: {len(self.img_ids)} images, "
@@ -90,7 +110,29 @@ class CocoFormatDataset(Dataset):
     def __len__(self) -> int:
         return len(self.img_ids)
 
-    def __getitem__(self, idx: int) -> Tuple[Tensor, Dict[str, Tensor]]:
+    # -- fsck helpers ------------------------------------------------------- #
+
+    def _filter_readable(self, candidate_ids: List[int]) -> Tuple[List[int], List[Path]]:
+        """Drop ids whose file is missing or zero bytes (truncated download)."""
+        keep: List[int] = []
+        dropped: List[Path] = []
+        for img_id in candidate_ids:
+            path = self.img_dir / self.images[img_id]["file_name"]
+            try:
+                st = path.stat()
+            except OSError:
+                dropped.append(path)
+                continue
+            if st.st_size == 0:
+                dropped.append(path)
+                continue
+            keep.append(img_id)
+        return keep, dropped
+
+    # -- decode + transform (pure, no error handling) ----------------------- #
+
+    def _load_sample(self, idx: int) -> Tuple[Tensor, Dict[str, Tensor]]:
+        """Load and transform one sample. Raises on any decode failure."""
         from PIL import Image
 
         img_id = self.img_ids[idx]
@@ -120,6 +162,36 @@ class CocoFormatDataset(Dataset):
 
         img_tensor, target = self.transform(img, target)
         return img_tensor, target
+
+    # -- public access: decode + graceful skip on failure ------------------- #
+
+    def __getitem__(self, idx: int) -> Tuple[Tensor, Dict[str, Tensor]]:
+        from PIL import UnidentifiedImageError
+
+        start_idx = idx
+        for attempt in range(BAD_IMAGE_MAX_SKIP):
+            try_idx = (start_idx + attempt) % len(self.img_ids)
+
+            # Skip ids we've already flagged corrupt in this worker.
+            if try_idx in self._bad_indices:
+                continue
+
+            try:
+                return self._load_sample(try_idx)
+            except (UnidentifiedImageError, OSError, SyntaxError) as e:
+                img_id = self.img_ids[try_idx]
+                path = str(self.img_dir / self.images[img_id]["file_name"])
+                self._bad_indices.add(try_idx)
+                if (path not in self._bad_paths_warned
+                        and len(self._bad_paths_warned) < BAD_IMAGE_WARN_CAP):
+                    self._bad_paths_warned.add(path)
+                    _logger.warning(f"[bad image] {path}: {type(e).__name__}: {e}")
+                # fall through to next attempt
+        raise RuntimeError(
+            f"CocoFormatDataset: could not load any valid image within "
+            f"{BAD_IMAGE_MAX_SKIP} indices starting from {start_idx}. "
+            f"Dataset is badly corrupted — abort."
+        )
 
 
 def collate_fn(batch):

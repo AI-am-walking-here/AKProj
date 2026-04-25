@@ -1,4 +1,4 @@
-"""Detection losses: classification (focal or CE) + bbox (L1 + GIoU).
+"""Detection losses: classification (focal, IA-BCE, or CE) + bbox (L1 + GIoU).
 
 All loss weights and the classification loss type are injected via
 constructor — nothing hardcoded.
@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torchvision.ops import box_iou
 
 from .matcher import HungarianMatcher, box_cxcywh_to_xyxy, generalized_box_iou
 
@@ -60,8 +61,9 @@ class DetectionLoss(nn.Module):
     Args:
         num_classes: Number of foreground classes.
         matcher: HungarianMatcher instance.
-        cls_type: ``"focal"`` for sigmoid focal loss (DETR v2 / DINOv3)
-            or ``"cross_entropy"`` for softmax CE (original DETR).
+        cls_type: ``"focal"`` for sigmoid focal loss (DETR v2 / DINOv3 Obj365
+            stages), ``"ia_bce"`` for IoU-aware BCE (Align-DETR-style; DINOv3
+            COCO fine-tune), or ``"cross_entropy"`` for softmax CE (original DETR).
         weight_cls: Classification loss weight.
         weight_bbox: L1 bbox loss weight.
         weight_giou: GIoU loss weight.
@@ -83,8 +85,10 @@ class DetectionLoss(nn.Module):
         focal_gamma: float = 2.0,
     ):
         super().__init__()
-        if cls_type not in ("focal", "cross_entropy"):
-            raise ValueError(f"cls_type must be 'focal' or 'cross_entropy', got '{cls_type}'")
+        if cls_type not in ("focal", "ia_bce", "cross_entropy"):
+            raise ValueError(
+                f"cls_type must be 'focal', 'ia_bce', or 'cross_entropy', got '{cls_type}'"
+            )
 
         self.num_classes = num_classes
         self.matcher = matcher
@@ -163,6 +167,10 @@ class DetectionLoss(nn.Module):
 
         if self.cls_type == "focal":
             return self._focal_classification(logits, targets, indices)
+        if self.cls_type == "ia_bce":
+            return self._ia_bce_classification(
+                logits, outputs["pred_boxes"], targets, indices
+            )
         return self._ce_classification(logits, targets, indices)
 
     def _ce_classification(
@@ -219,6 +227,51 @@ class DetectionLoss(nn.Module):
         )
         return loss / num_boxes
 
+    def _ia_bce_classification(
+        self,
+        logits: Tensor,
+        pred_boxes: Tensor,
+        targets: List[Dict[str, Tensor]],
+        indices: List[Tuple[Tensor, Tensor]],
+    ) -> Tensor:
+        """IoU-aware BCE (IA-BCE), simplified from Align-DETR (Cai et al.).
+
+        One-to-one Hungarian matches only (no multi-candidate rank reweighting).
+        ``focal_alpha`` is reused as the quality mixing exponent α in
+        ``t = (p^α)(IoU^(1-α))`` (detached target on positives).
+        ``focal_gamma`` is the negative exponent γ on ``p^γ`` as in Align-DETR.
+        """
+        B, Q, _ = logits.shape
+        src_logits = logits[:, :, : self.num_classes]
+        prob = src_logits.sigmoid()
+        neg_weights = prob.pow(self.focal_gamma)
+        pos_weights = torch.zeros_like(src_logits)
+
+        for b, (pred_idx, tgt_idx) in enumerate(indices):
+            if pred_idx.numel() == 0:
+                continue
+            pb = pred_boxes[b, pred_idx]
+            tb = targets[b]["boxes"][tgt_idx]
+            pb_xy = box_cxcywh_to_xyxy(pb)
+            tb_xy = box_cxcywh_to_xyxy(tb)
+            ious = box_iou(pb_xy, tb_xy).diag()
+            cls_ids = targets[b]["labels"][tgt_idx]
+            alpha = self.focal_alpha
+            for k in range(pred_idx.shape[0]):
+                q = int(pred_idx[k].item())
+                c = int(cls_ids[k].item())
+                p = prob[b, q, c]
+                iou = ious[k].clamp(0.0, 1.0)
+                t = (p.detach().pow(alpha) * iou.pow(1.0 - alpha)).clamp(min=0.01)
+                pos_weights[b, q, c] = t
+                neg_weights[b, q, c] = 1.0 - t
+
+        eps = 1e-8
+        p = prob.clamp(eps, 1.0 - eps)
+        per_elem = -pos_weights * p.log() - neg_weights * (1.0 - p).log()
+        num_boxes = max(sum(t["labels"].shape[0] for t in targets), 1)
+        return per_elem.sum() / num_boxes
+
     def _loss_boxes(
         self,
         outputs: Dict[str, Tensor],
@@ -236,7 +289,7 @@ class DetectionLoss(nn.Module):
                 tgt_boxes.append(targets[b]["boxes"][tgt_idx])
 
         if not src_boxes:
-            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            zero = pred_boxes.sum() * 0.0
             return zero, zero
 
         src_boxes = torch.cat(src_boxes)

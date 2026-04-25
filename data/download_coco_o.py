@@ -79,8 +79,17 @@ def _load_json(p: Path) -> Dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _merge_coco(dicts: Iterable[Dict]) -> Dict:
-    """Merge multiple COCO-format dicts into one, re-keying ids to avoid collisions."""
+def _domain_prefixed_name(domain: str, file_name: str) -> str:
+    """Prefix a basename with its domain so flattened output stays collision-free."""
+    return f"{domain}__{os.path.basename(file_name)}"
+
+
+def _merge_coco(tagged_dicts: Iterable[Tuple[str, Dict]]) -> Dict:
+    """Merge per-domain COCO-format dicts into one; re-key ids and prefix filenames.
+
+    Each input is `(domain, coco_dict)`. Output images carry a `domain` field and a
+    flattened `file_name` of the form `{domain}__{basename}`.
+    """
     out_images: List[Dict] = []
     out_anns: List[Dict] = []
     cats_by_name: Dict[str, Dict] = {}
@@ -88,7 +97,7 @@ def _merge_coco(dicts: Iterable[Dict]) -> Dict:
     next_ann_id = 1
     next_cat_id = 1
 
-    for d in dicts:
+    for domain, d in tagged_dicts:
         img_id_map: Dict[int, int] = {}
         cat_id_map: Dict[int, int] = {}
 
@@ -103,7 +112,12 @@ def _merge_coco(dicts: Iterable[Dict]) -> Dict:
             new_id = next_img_id
             next_img_id += 1
             img_id_map[im["id"]] = new_id
-            out_images.append({**im, "id": new_id, "file_name": os.path.basename(im["file_name"])})
+            out_images.append({
+                **im,
+                "id": new_id,
+                "domain": domain,
+                "file_name": _domain_prefixed_name(domain, im["file_name"]),
+            })
 
         for ann in d.get("annotations", []):
             if ann.get("image_id") not in img_id_map:
@@ -124,11 +138,24 @@ def _merge_coco(dicts: Iterable[Dict]) -> Dict:
 
 
 def _index_images(raw_root: Path) -> Dict[str, Path]:
-    """Map basename -> full path for every image under raw_root (first match wins)."""
+    """Map `{domain}__{basename}` -> full path for every image under raw_root.
+
+    Domain is inferred from the path segment immediately under the dataset root
+    (e.g. `ood_coco/sketch/val2017/x.jpg` -> domain `sketch`). This keeps the
+    lookup key aligned with `_domain_prefixed_name` used in the merged JSON.
+    """
     idx: Dict[str, Path] = {}
     for p in raw_root.rglob("*"):
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
-            idx.setdefault(p.name, p)
+        if not (p.is_file() and p.suffix.lower() in IMAGE_EXTS):
+            continue
+        try:
+            rel = p.relative_to(raw_root).parts
+        except ValueError:
+            continue
+        # Expected layout: <dataset_root>/<domain>/val2017/<file>
+        # rel[0] is dataset root (e.g. "ood_coco"), rel[1] is domain.
+        domain = rel[1] if len(rel) >= 3 else (rel[0] if rel else "unknown")
+        idx.setdefault(_domain_prefixed_name(domain, p.name), p)
     return idx
 
 
@@ -175,7 +202,13 @@ def build_subset(cfg: SubsetConfig) -> Tuple[Path, Path]:
 
     ann_jsons = _find_annotation_jsons(RAW_DIR)
     _logger.info(f"Found {len(ann_jsons)} annotation file(s): {[p.name for p in ann_jsons]}")
-    merged = _merge_coco(_load_json(p) for p in ann_jsons)
+
+    def _domain_of(ann_path: Path) -> str:
+        # COCO-O layout: <root>/<domain>/annotations/instances_val2017.json
+        parent = ann_path.parent
+        return parent.parent.name if parent.name == "annotations" else parent.name
+
+    merged = _merge_coco((_domain_of(p), _load_json(p)) for p in ann_jsons)
     _logger.info(
         f"Merged COCO: {len(merged['images'])} images, "
         f"{len(merged['annotations'])} anns, "

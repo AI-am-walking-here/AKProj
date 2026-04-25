@@ -1,0 +1,141 @@
+# =============================================================================
+# Full training run — DINOv3 detection-transfer schedule (paper-aligned)
+#
+# Copied from configs/schedules/dinov3_style.yaml (DINOv3 §6.3.1 + Appendix D.9):
+#   Stage 1: Objects365, 22 epochs, lr 5e-5, step decay /10 at epoch 20,
+#            warmup 1000 steps, focal + L1 + GIoU(w=2), multiscale proxy.
+#   Stage 2: Objects365, 4 epochs, lr 2.5e-5, constant LR, same losses.
+#   Stage 3: COCO fine-tune, 12 epochs, cosine lr 2.5e-5 -> 2.5e-6 (lr_min_ratio
+#            0.1, ~epoch 8), warmup 2000 steps, weight_giou 4, cls ia_bce (DINOv3 COCO stage).
+#
+# Same deviations as dinov3_style.yaml: img_size 256 (paper 1536/2048),
+# COCO train subset unless you point train paths at full train2017.
+#
+# Optional: pass `--max-samples 5000` at runtime to cap samples per epoch.
+# =============================================================================
+
+name: full_run_20_3_1
+base_config: configs/default.yaml
+output_root: checkpoints/schedules/full_run_20_3_1
+seed: 42
+
+common_overrides:
+  training:
+    batch_size: 32
+    weight_decay: 0.05
+    max_grad_norm: 0.1
+    amp: true
+    num_workers: 4
+  matcher:
+    cost_class: 2.0
+    cost_bbox: 5.0
+    cost_giou: 2.0
+  output:
+    log_interval: 50
+    save_interval: 5
+
+eval_suites:
+  in_domain:
+    - name: coco
+      img_dir: data/coco/val2017
+      ann_file: data/coco/annotations/instances_val2017.json
+
+  robustness:
+    - name: coco_o
+      img_dir: data/coco-o/images
+      ann_file: data/coco-o/annotations/coco_o.json
+
+stages:
+  - name: obj365_lowres
+    enabled: true
+    init_from: null
+    train:
+      img_dir: data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      backbone:
+        img_size: 256
+      training:
+        epochs: 22
+        lr: 5.0e-5
+        lr_schedule: step
+        lr_drop: 20
+        warmup_steps: 1000
+      loss:
+        cls_type: focal
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 2.0
+      augmentation:
+        horizontal_flip: true
+        color_jitter: false
+        random_crop: true
+        crop_min_scale: 0.6
+        multiscale: [224, 240, 256]
+    eval:
+      suites: [in_domain]
+      at_epochs: [1, 10, 20, 22]
+
+  - name: obj365_highres
+    enabled: true
+    init_from: "@prev"
+    train:
+      img_dir: data/objects365/train
+      ann_file: data/objects365/annotations/train.json
+    overrides:
+      backbone:
+        img_size: 256
+      training:
+        epochs: 4
+        lr: 2.5e-5
+        lr_schedule: step
+        lr_drop: 10
+        warmup_steps: 0
+      loss:
+        cls_type: focal
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 2.0
+      augmentation:
+        horizontal_flip: true
+        color_jitter: false
+        random_crop: true
+        crop_min_scale: 0.6
+    eval:
+      suites: [in_domain]
+      at_epochs: [-1]
+
+  - name: coco_finetune
+    enabled: true
+    init_from: "@prev"
+    train:
+      img_dir: data/coco/train2017_subset
+      ann_file: data/coco/annotations/instances_train2017_subset.json
+    overrides:
+      backbone:
+        img_size: 256
+      training:
+        epochs: 12
+        lr: 2.5e-5
+        lr_schedule: cosine
+        lr_min_ratio: 0.1
+        warmup_steps: 2000
+      loss:
+        cls_type: ia_bce
+        focal_alpha: 0.25
+        focal_gamma: 2.0
+        weight_cls: 2.0
+        weight_bbox: 1.0
+        weight_giou: 4.0
+      augmentation:
+        horizontal_flip: true
+        color_jitter: false
+        random_crop: true
+        crop_min_scale: 0.6
+    eval:
+      suites: [in_domain, robustness]
+      at_epochs: [4, 8, 12]
