@@ -311,6 +311,12 @@ def run_training(cfg: Config) -> Dict[str, Any]:
         img_size=cfg.backbone.img_size,
         transform=train_transform,
     )
+    if len(train_dataset) == 0:
+        raise ValueError(
+            "Training dataset is empty (see CocoFormatDataset error above if raised). "
+            f"train_img_dir={cfg.data.train_img_dir!r}, train_ann={cfg.data.train_ann!r}. "
+            "Fix paths or download images before training."
+        )
     num_classes = cfg.data.num_classes or train_dataset.num_classes
     _logger.info(f"Training classes: {num_classes}")
 

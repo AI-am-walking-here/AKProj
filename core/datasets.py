@@ -81,6 +81,7 @@ class CocoFormatDataset(Dataset):
             img_id for img_id in self.images
             if img_id in self.img_anns and len(self.img_anns[img_id]) > 0
         ]
+        n_candidates = len(candidate_ids)
 
         # Filter out missing / zero-byte files up front. Catches truncated downloads
         # cheaply (no decode). Truly corrupt-but-nonzero files are handled lazily in
@@ -90,6 +91,16 @@ class CocoFormatDataset(Dataset):
             _logger.warning(
                 f"  skipped {len(skipped)} missing/zero-byte images "
                 f"(first 3: {[s.name for s in skipped[:3]]})"
+            )
+
+        if not self.img_ids:
+            raise ValueError(
+                "CocoFormatDataset: zero usable images after filtering. "
+                f"{n_candidates} annotation entries pointed to files under {self.img_dir}, "
+                f"but none were readable (missing or zero-byte). "
+                f"Ann file: {ann_file}. "
+                "Install images so each COCO `file_name` exists under `img_dir` "
+                "(e.g. unzip train2017 into data/coco/train2017)."
             )
 
         # Runtime bad-image bookkeeping (populated in __getitem__ as errors surface).

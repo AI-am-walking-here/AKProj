@@ -1,22 +1,38 @@
 # =============================================================================
-# Full training run — DINOv3 detection-transfer schedule (paper-aligned)
+# DINOv3-style detection transfer — FULL Objects365 + FULL COCO train2017
 #
-# Copied from configs/schedules/dinov3_style.yaml (DINOv3 §6.3.1 + Appendix D.9):
-#   Stage 1: Objects365, 22 epochs, lr 5e-5, step decay /10 at epoch 20,
-#            warmup 1000 steps, focal + L1 + GIoU(w=2), multiscale proxy.
-#   Stage 2: Objects365, 4 epochs, lr 2.5e-5, constant LR, same losses.
-#   Stage 3: COCO fine-tune, 12 epochs, cosine lr 2.5e-5 -> 2.5e-6 (lr_min_ratio
-#            0.1, ~epoch 8), warmup scaled to subset batch count, weight_giou 4, cls ia_bce.
+# Same stage recipe as configs/schedules/dinov3_style.yaml (paper §6.3.1 + D.9):
+#   1) obj365_lowres  — full Obj365 train, 22 ep, lr 5e-5, step /10 @ ep 20,
+#                       focal, L1+GIoU(w=2), 1000-step warmup, multiscale proxy.
+#   2) obj365_highres — same data, 4 ep, lr 2.5e-5 constant, same losses.
+#   3) coco_finetune  — full COCO train2017 (~118k imgs), 12 ep, cosine to 0.1×lr,
+#                       2000-step warmup (finishes in <1 ep @ bs=32), IA-BCE,
+#                       weight_giou 4, classifier 365→80 via shape-tolerant load.
 #
-# Same deviations as dinov3_style.yaml: img_size 256 (paper 1536/2048),
-# COCO train subset unless you point train paths at full train2017.
+# Paths (you must have these on disk):
+#   Objects365:  data/objects365/train  +  data/objects365/annotations/train.json
+#   COCO train:  data/coco/train2017     +  data/coco/annotations/instances_train2017.json
+#     The JSON alone is not enough — you need ~118k JPEGs from the official
+#     train2017 zip. If img_dir is empty/wrong, the dataset drops to 0 images and
+#     training aborts with a clear ValueError (or use train2017_subset for dev).
+#   COCO val:    data/coco/val2017       +  data/coco/annotations/instances_val2017.json
+#   COCO-O (stage-3 eval): optional; disable by removing robustness from stage 3 if missing.
 #
-# Optional: pass `--max-samples 5000` at runtime to cap samples per epoch.
+# VRAM / OOM: bs=32 @ 256 fits ~9 GB head+ViT in prior notes. If OOM, lower ONLY
+#   common_overrides.training.batch_size and scale lr linearly (e.g. bs 16 → lr 2.5e-5 → 1.25e-5).
+#
+# Run full pipeline:
+#   conda activate akproj
+#   cd <repo>
+#   python schedule.py --schedule configs/schedules/dinov3_full_data.yaml
+#
+# Single stage:
+#   python schedule.py --schedule configs/schedules/dinov3_full_data.yaml --only coco_finetune
 # =============================================================================
 
-name: full_run_20_3_1
+name: dinov3_full_data
 base_config: configs/default.yaml
-output_root: checkpoints/schedules/full_run_20_3_1
+output_root: checkpoints/schedules/dinov3_full_data
 seed: 42
 
 common_overrides:
@@ -25,13 +41,13 @@ common_overrides:
     weight_decay: 0.05
     max_grad_norm: 0.1
     amp: true
-    num_workers: 4
+    num_workers: 8
   matcher:
     cost_class: 2.0
     cost_bbox: 5.0
     cost_giou: 2.0
   output:
-    log_interval: 50
+    log_interval: 100
     save_interval: 5
 
 eval_suites:
@@ -113,8 +129,8 @@ stages:
     enabled: true
     init_from: "@prev"
     train:
-      img_dir: data/coco/train2017_subset
-      ann_file: data/coco/annotations/instances_train2017_subset.json
+      img_dir: data/coco/train2017
+      ann_file: data/coco/annotations/instances_train2017.json
     overrides:
       backbone:
         img_size: 256
@@ -123,9 +139,8 @@ stages:
         lr: 2.5e-5
         lr_schedule: cosine
         lr_min_ratio: 0.1
-        # Paper uses ~2000 *iterations* at full COCO batch count. With ~154 batches/epoch
-        # on the 5k subset, 2000 steps never finishes in 12 epochs — LR stays tiny, AP≈0.
-        warmup_steps: 400
+        # Paper D.9: ~2000 iterations warmup. @ bs=32, ~3696 batches/ep on full COCO → completes in <1 ep.
+        warmup_steps: 2000
       loss:
         cls_type: ia_bce
         focal_alpha: 0.25
